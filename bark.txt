@@ -1,0 +1,7 @@
+.
+├── CHANGELOG.md.gitignore
+├── LICENCE
+├── README.md
+└── go.mod
+
+0 directories, 4 files
