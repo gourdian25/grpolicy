@@ -1,7 +1,27 @@
 .
 ├── CHANGELOG.md.gitignore
+├── CLAUDE.md
 ├── LICENCE
 ├── README.md
-└── go.mod
+├── ast_helpers.go
+├── cache.go
+├── complexity_internal_test.go
+├── conformance/
+│   └── conformance.go
+├── docs/
+│   ├── architecture.md
+│   └── plan/
+│       └── grpolicy-plan.md
+├── docs.go
+├── engine.go
+├── errors.go
+├── eval.go
+├── functions.go
+├── fuzz_test.go
+├── go.mod
+├── go.sum
+├── grpolicy_test.go
+├── logger.go
+└── policy.go
 
-0 directories, 4 files
+3 directories, 21 files

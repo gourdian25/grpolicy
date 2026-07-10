@@ -1,0 +1,40 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+grpolicy is a standalone attribute-based policy/expression evaluation engine — not authentication, not authorization, no concept of "user"/"role"/"permission." Given a compiled boolean expression and a `map[string]any` of attributes, `Evaluate` returns a `Decision{Allowed bool, Trace []CheckNode}`. It is the future `grauth` repo's primary dependency: every RBAC/ABAC decision `grauth` makes is meant to route through `grpolicy.Evaluate()`, with `grauth` owning the "who has which role" vocabulary and grpolicy only ever seeing attribute maps. See `docs/plan/grpolicy-plan.md` for the original scope/API spec and `docs/architecture.md` for the specific decisions made while building it (why `expr-lang/expr` over `cel-go`, the short-circuit trace policy, fail-loud missing-key/type-mismatch semantics, the reserved-builtin-name constraint on `RegisterFunction`, the `CheckNode.Expression` bracket-matching fix, etc.) — read `docs/architecture.md` before changing any of those behaviors, since each entry there exists specifically to stop that decision from being silently re-litigated.
+
+**Precise, non-aspirational claim (preserved everywhere — code comments, README, docs.go, SECURITY.md):** `Decision.Trace` shows the full static expression shape as written, including short-circuited `&&`/`||` branches (`Evaluated: false`, `Result: nil` — never a coerced `false`). It is a byproduct of grpolicy's own evaluator, not `expr-lang/expr`'s `Run`/VM path, so it can never diverge from what actually gated the decision. A missing attribute or type mismatch is always a hard error (`ErrAttributeMissing`/`ErrTypeMismatch`), never silently coerced — do not let a future change reintroduce silent zero-value substitution in any documentation or code path.
+
+## Commands
+
+```sh
+make test             # go test -cover ./...
+make race             # go test -race ./...  (mandatory before any commit touching eval.go or cache.go)
+make coverage         # HTML coverage report
+make coverage-check   # verify the root package meets 80% coverage
+make bench             # go test -bench=. -benchmem -benchtime=10s ./...
+make fuzz              # fuzz Compile+Evaluate for 3m (FUZZTIME=... to override) — see fuzz_test.go
+make lint               # golangci-lint run ./...
+make vet                # go vet ./...
+make fmt                # gofmt
+make release VERSION=vX.Y.Z   # tag, push, goreleaser release --clean
+make goreleaser-check         # dry run: goreleaser check + --snapshot --clean
+```
+
+Run a single conformance scenario directly: `go test ./... -run TestConformance/ShortCircuitAndTrace -v`. The full behavioral suite lives in `conformance/conformance.go` behind `conformance.Run(t, newEngine, opts...)` and is invoked from `grpolicy_test.go`'s `TestConformance`; add new scenarios there, not as ad hoc `_test.go` files scattered across the root package.
+
+## Architecture
+
+- **Parsing vs. evaluation are deliberately split.** `engine.go`'s `Compile` calls `github.com/expr-lang/expr/parser.Parse` — the *only* thing imported from that library's execution path. grpolicy never touches `expr.Compile`/`expr.Run`/`vm.Program`/`expr.Function`. `eval.go` is grpolicy's own tree-walking evaluator over the returned `ast.Node` tree; it builds `CheckNode`s inline as it walks, which is what makes `Decision.Trace` a byproduct of the same walk that produces the result rather than a second, potentially-divergent reimplementation.
+- **`children()` in `ast_helpers.go` is the single source of truth for "what are this node's evaluated sub-expressions."** It's shared by `measureComplexity` (compile-time complexity limits), `validateFunctionCalls` (compile-time function-reference validation), and `buildStub` (`eval.go`'s short-circuit-branch stub builder). If you add a new `ast.Node` kind to the evaluator's type switch, add it here too or these three will silently drift apart.
+- **`now` and `duration` are `*ast.BuiltinNode` cases in `eval.go`, not entries in the `functionRegistry`.** expr-lang/expr's parser reserves a fixed set of bare identifiers (`github.com/expr-lang/expr/builtin.Index`) and always parses a call to one of them as a `BuiltinNode`, never a `CallNode` — regardless of what's registered. `functionRegistry.register` (in `functions.go`) rejects `RegisterFunction` calls for any other reserved name outright, since such a registration could never actually be reached. See `docs/architecture.md` §9 for how this was discovered (empirically, via `go doc` + real `parser.Parse` output — don't assume expr-lang/expr's AST shape from memory if it changes across a version bump; re-verify).
+- **Short-circuit and fail-loud semantics are both proven by falsifying tests, not just implemented.** `conformance.testShortCircuitAndTrace` and `testMissingAttributeKey`/`testTypeMismatch` were manually verified during development to actually fail when the corresponding guarantee was broken (short-circuiting disabled, silent zero-value substitution reintroduced). If you touch `evalAnd`/`evalOr`/`evalIdentifier`/`evalComparison` in `eval.go`, re-run that check rather than trusting that the test merely "passes."
+- **The compiled-policy cache (`cache.go`) is a hand-rolled `container/list` LRU behind a single `sync.Mutex`**, not `sync.Map` — deliberately the simplest thing to reason about. Its concurrency correctness is asserted by `conformance.testConcurrentCompileEvaluateStress` under `-race`, per the ecosystem-wide lesson (from a grevents audit) that a lock that "looks correct on read" must be verified under real concurrent load.
+- **Ecosystem conventions replicated verbatim from grcache/grevents/graudit**: `// File: <path>` as the first line of every `.go` file; `errors.New("grpolicy: ...")` sentinels with no `IsX(err) bool` helpers (use `errors.Is`); the 3-method `Logger` interface (`Infof`/`Warnf`/`Errorf`) with `NopLogger()`/`OrNop()`, never an actual grlog import; `sync.Once`+`atomic.Bool`-guarded idempotent `Close()`.
+
+## Ecosystem context
+
+Sibling repos in the "gourdian" ecosystem under github.com/gourdian25: `gourdiantoken` (JWT management), `grlog` (structured logging), `grcache` (backend-agnostic caching), `grevents` (in-process event bus), `graudit` (tamper-evident audit trail), and the not-yet-built `grauth` (authentication + the primary consumer of this repo). `grauth` follows `grpolicy` directly in the ecosystem's build order.
