@@ -4,16 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-grpolicy is a standalone attribute-based policy/expression evaluation engine — not authentication, not authorization, no concept of "user"/"role"/"permission." Given a compiled boolean expression and a `map[string]any` of attributes, `Evaluate` returns a `Decision{Allowed bool, Trace []CheckNode}`. It is the future `grauth` repo's primary dependency: every RBAC/ABAC decision `grauth` makes is meant to route through `grpolicy.Evaluate()`, with `grauth` owning the "who has which role" vocabulary and grpolicy only ever seeing attribute maps. See `docs/plan/grpolicy-plan.md` for the original scope/API spec and `docs/architecture.md` for the specific decisions made while building it (why `expr-lang/expr` over `cel-go`, the short-circuit trace policy, fail-loud missing-key/type-mismatch semantics, the reserved-builtin-name constraint on `RegisterFunction`, etc.) — read `docs/architecture.md` before changing any of those behaviors, since each entry there exists specifically to stop that decision from being silently re-litigated.
+grpolicy is a standalone attribute-based policy/expression evaluation engine — not authentication, not authorization, no concept of "user"/"role"/"permission." Given a compiled boolean expression and a `map[string]any` of attributes, `Evaluate` returns a `Decision{Allowed bool, Trace []CheckNode}`. It is the future `grauth` repo's primary dependency: every RBAC/ABAC decision `grauth` makes is meant to route through `grpolicy.Evaluate()`, with `grauth` owning the "who has which role" vocabulary and grpolicy only ever seeing attribute maps. See `docs/plan/grpolicy-plan.md` for the original scope/API spec and `docs/architecture.md` for the specific decisions made while building it (why `expr-lang/expr` over `cel-go`, the short-circuit trace policy, fail-loud missing-key/type-mismatch semantics, the reserved-builtin-name constraint on `RegisterFunction`, the `CheckNode.Expression` bracket-matching fix, etc.) — read `docs/architecture.md` before changing any of those behaviors, since each entry there exists specifically to stop that decision from being silently re-litigated.
+
+**Precise, non-aspirational claim (preserved everywhere — code comments, README, docs.go, SECURITY.md):** `Decision.Trace` shows the full static expression shape as written, including short-circuited `&&`/`||` branches (`Evaluated: false`, `Result: nil` — never a coerced `false`). It is a byproduct of grpolicy's own evaluator, not `expr-lang/expr`'s `Run`/VM path, so it can never diverge from what actually gated the decision. A missing attribute or type mismatch is always a hard error (`ErrAttributeMissing`/`ErrTypeMismatch`), never silently coerced — do not let a future change reintroduce silent zero-value substitution in any documentation or code path.
 
 ## Commands
 
-- Build: `go build ./...`
-- Vet: `go vet ./...`
-- Format check: `gofmt -l .` (should be empty; `gofmt -w .` to fix)
-- Test: `go test ./... -race` — `-race` is not optional; the `ConcurrentCompileEvaluateStress` conformance scenario is meaningless without it
-- Run a single scenario: `go test ./... -run TestConformance/ShortCircuitAndTrace -v`
-- The full behavioral suite lives in `conformance/conformance.go` behind `conformance.Run(t, newEngine, opts...)` and is invoked from `grpolicy_test.go`'s `TestConformance`; add new scenarios there, not as ad hoc `_test.go` files scattered across the root package.
+```sh
+make test             # go test -cover ./...
+make race             # go test -race ./...  (mandatory before any commit touching eval.go or cache.go)
+make coverage         # HTML coverage report
+make coverage-check   # verify the root package meets 80% coverage
+make bench             # go test -bench=. -benchmem -benchtime=10s ./...
+make fuzz              # fuzz Compile+Evaluate for 3m (FUZZTIME=... to override) — see fuzz_test.go
+make lint               # golangci-lint run ./...
+make vet                # go vet ./...
+make fmt                # gofmt
+make release VERSION=vX.Y.Z   # tag, push, goreleaser release --clean
+make goreleaser-check         # dry run: goreleaser check + --snapshot --clean
+```
+
+Run a single conformance scenario directly: `go test ./... -run TestConformance/ShortCircuitAndTrace -v`. The full behavioral suite lives in `conformance/conformance.go` behind `conformance.Run(t, newEngine, opts...)` and is invoked from `grpolicy_test.go`'s `TestConformance`; add new scenarios there, not as ad hoc `_test.go` files scattered across the root package.
 
 ## Architecture
 

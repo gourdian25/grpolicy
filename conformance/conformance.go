@@ -77,6 +77,7 @@ func Run(t *testing.T, newEngine func() (grpolicy.Engine, error), opts ...RunOpt
 	t.Run("CacheKeyIsRawSourceString", func(t *testing.T) { testCacheKeyIsRawSourceString(t, newEngine) })
 	t.Run("EngineOptionsAndLogger", func(t *testing.T) { testEngineOptionsAndLogger(t) })
 	t.Run("FunctionCallDispatchEdgeCases", func(t *testing.T) { testFunctionCallDispatchEdgeCases(t, newEngine) })
+	t.Run("ExpressionTextIncludesClosingDelimiters", func(t *testing.T) { testExpressionTextIncludesClosingDelimiters(t, newEngine) })
 }
 
 func testBooleanOperators(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
@@ -563,7 +564,7 @@ func testConcurrentCompileEvaluateStress(t *testing.T, newEngine func() (grpolic
 					return
 				}
 				if _, err := policy.Evaluate(ctx, map[string]any{"x": 100}); err != nil {
-					errCh <- fmt.Errorf("Evaluate after Compile(%q): %w", expr, err)
+					errCh <- fmt.Errorf("evaluate after Compile(%q): %w", expr, err)
 					return
 				}
 			}
@@ -1232,6 +1233,77 @@ func testFunctionCallDispatchEdgeCases(t *testing.T, newEngine func() (grpolicy.
 		}
 		if !decision.Allowed {
 			t.Fatalf("Allowed = false, want true (int attribute auto-converted to float64 parameter)")
+		}
+	})
+}
+
+// testExpressionTextIncludesClosingDelimiters is a regression test for a
+// real bug caught by running example/example.go directly (not by any test
+// — the earlier automated suite never asserted exact Expression text for a
+// call or array literal): a CallNode's or ArrayNode's Expression field was
+// missing its trailing ")"/"]" entirely (e.g. "isBusinessHours(hour" instead
+// of "isBusinessHours(hour)"), because expr-lang/expr's own Location() for
+// these node kinds covers only the bare name/opening bracket, and no
+// argument's own span reaches the closing delimiter either. See
+// docs/architecture.md for the fix (bracket-matching from the opening
+// delimiter) and why source-slicing alone was insufficient.
+func testExpressionTextIncludesClosingDelimiters(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
+	t.Helper()
+	engine, err := newEngine()
+	if err != nil {
+		t.Fatalf("newEngine: %v", err)
+	}
+	defer engine.Close()
+	ctx := context.Background()
+
+	if err := engine.RegisterFunction("double", func(x int) int { return x * 2 }); err != nil {
+		t.Fatalf("RegisterFunction: %v", err)
+	}
+
+	cases := []struct {
+		name         string
+		expr         string
+		attrs        map[string]any
+		wantChildExp string // Expression text expected on Trace[0].Children[0]
+	}{
+		{"ZeroArgCall", "now() <= now()", map[string]any{}, "now()"},
+		{"OneArgCall", "double(x) == 10", map[string]any{"x": 5}, "double(x)"},
+		{"NestedCall", "double(double(x)) == 20", map[string]any{"x": 5}, "double(double(x))"},
+		{"ArrayLiteral", "x in [1, 2, 3]", map[string]any{"x": 2}, "x"}, // left child is "x"; right child checked separately below
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			policy, err := engine.Compile(c.expr)
+			if err != nil {
+				t.Fatalf("Compile(%q): %v", c.expr, err)
+			}
+			decision, err := policy.Evaluate(ctx, c.attrs)
+			if err != nil {
+				t.Fatalf("Evaluate(%q): %v", c.expr, err)
+			}
+			if len(decision.Trace) != 1 || len(decision.Trace[0].Children) == 0 {
+				t.Fatalf("Trace shape unexpected for %q: %+v", c.expr, decision.Trace)
+			}
+			got := decision.Trace[0].Children[0].Expression
+			if got != c.wantChildExp {
+				t.Fatalf("Trace[0].Children[0].Expression = %q, want %q (closing delimiter must not be dropped)", got, c.wantChildExp)
+			}
+		})
+	}
+
+	t.Run("ArrayLiteralClosingBracket", func(t *testing.T) {
+		policy, err := engine.Compile("x in [1, 2, 3]")
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		decision, err := policy.Evaluate(ctx, map[string]any{"x": 2})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		right := decision.Trace[0].Children[1]
+		if right.Expression != "[1, 2, 3]" {
+			t.Fatalf("array literal Expression = %q, want %q (closing bracket must not be dropped)", right.Expression, "[1, 2, 3]")
 		}
 	})
 }

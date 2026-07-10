@@ -173,3 +173,38 @@ a normalized re-print of the AST) is a valid v0.2+ change, but it changes
 `WithCacheSize`'s effective capacity semantics and must be re-documented
 here if adopted. Proven by
 `conformance.testCacheKeyIsRawSourceString`.
+
+## 11. `CheckNode.Expression` for calls and array literals: bracket-matching, not source-slicing
+
+Found by actually running `example/example.go` (not by any automated test —
+this is a caution against trusting a green test suite alone when the suite
+never asserted the exact string in question): `isBusinessHours(hour)`'s
+`CheckNode.Expression` came back as `"isBusinessHours(hour"` — missing the
+trailing `)`. The cause: `ast.CallNode.Location()` and
+`ast.BuiltinNode.Location()` cover only the bare function name (confirmed
+empirically, same as the `BinaryNode`-covers-only-its-operator finding in
+§0 of the original plan), and no argument's own span reaches the closing
+`)` either — it belongs to no node at all in expr-lang/expr's AST, so
+unioning children's spans (`nodeSpan`'s original approach, correct for
+`BinaryNode`/`UnaryNode`) systematically misses it. The same issue affects
+`ArrayNode` and its trailing `]`.
+
+The fix (`ast_helpers.go`'s `nodeSpan`/`matchClosingFrom`): for
+`CallNode`/`BuiltinNode`/`ArrayNode` specifically, locate the opening
+`(`/`[` from the name's end (or, for `ArrayNode`, its own `Location()`,
+which does start at `[`) and scan forward for the balanced matching close,
+tracking nested brackets of either kind uniformly and skipping over
+double-quoted string contents so a bracket character inside a string
+literal argument is never miscounted. Every other node kind keeps the
+original children-span-union approach, which is sufficient for them.
+
+Added as a regression test,
+`conformance.testExpressionTextIncludesClosingDelimiters`, covering a
+zero-arg call, a one-arg call, a nested call, and an array literal — the
+exact shapes that silently lost their closing delimiter before the fix.
+The lesson generalizes: `Decision.Trace` is a debugging/explainability
+surface whose entire value proposition is showing a human exactly what ran
+— a subtly-wrong `Expression` string is the kind of bug automated
+assertions on `Allowed`/`Result`/`Evaluated` alone will never catch, since
+it doesn't affect the boolean outcome at all. Running the actual example
+program, not just the test suite, is what caught it.

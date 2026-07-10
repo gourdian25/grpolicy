@@ -52,25 +52,46 @@ func measureComplexity(n ast.Node) (nodeCount, maxDepth int) {
 }
 
 // nodeSpan returns the [from, to) byte range in the original source that n
-// and all of its descendants (per children, plus a CallNode's Callee, which
-// children deliberately omits since it isn't an evaluated sub-expression)
-// span. ast.Node.Location() alone is not sufficient for this: expr-lang/expr
+// spans. ast.Node.Location() alone is not sufficient for this: expr-lang/expr
 // gives a BinaryNode's own Location as just its operator token's span (e.g.
-// "&&"), not the full left-to-right range — confirmed empirically against
-// the actual parser output, not assumed.
-func nodeSpan(n ast.Node) (from, to int) {
+// "&&"), not the full left-to-right range, and gives a CallNode/BuiltinNode's
+// own Location as just its bare name (e.g. "isBusinessHours", not
+// "isBusinessHours(hour)") — confirmed empirically against real parser
+// output, not assumed, including the fact that neither ever includes a
+// trailing closing delimiter contributed by punctuation alone (no argument's
+// own span reaches the ")"/"]" itself).
+//
+// CallNode/BuiltinNode/ArrayNode are therefore handled by locating the
+// opening "("/"[" and scanning forward for its balanced match, rather than
+// by unioning children's spans (which would still miss the closing
+// delimiter, since it belongs to no child node). Every other kind unions
+// children's spans (via children()), which is sufficient for them since
+// expr-lang's grammar never adds trailing punctuation after a BinaryNode's
+// or UnaryNode's last operand.
+func nodeSpan(n ast.Node, source string) (from, to int) {
+	switch node := n.(type) {
+	case *ast.CallNode:
+		// The Callee's own span always starts at the function name;
+		// scanning from there finds the call's opening paren reliably even
+		// though CallNode.Location() itself only covers the bare name.
+		nameFrom, nameTo := nodeSpan(node.Callee, source)
+		return nameFrom, matchClosingFrom(source, nameTo, '(', ')')
+	case *ast.BuiltinNode:
+		loc := node.Location()
+		return loc.From, matchClosingFrom(source, loc.To, '(', ')')
+	case *ast.ArrayNode:
+		loc := node.Location()
+		// ArrayNode.Location() starts at "[" itself (confirmed empirically).
+		return loc.From, matchClosingFrom(source, loc.From, '[', ']')
+	}
+
 	loc := n.Location()
 	from, to = loc.From, loc.To
-
-	extra := children(n)
-	if call, ok := n.(*ast.CallNode); ok {
-		extra = append([]ast.Node{call.Callee}, extra...)
-	}
-	for _, c := range extra {
+	for _, c := range children(n) {
 		if c == nil {
 			continue
 		}
-		cf, ct := nodeSpan(c)
+		cf, ct := nodeSpan(c, source)
 		if cf < from {
 			from = cf
 		}
@@ -81,11 +102,58 @@ func nodeSpan(n ast.Node) (from, to int) {
 	return from, to
 }
 
+// matchClosingFrom scans source starting at searchFrom (skipping leading
+// whitespace) for openCh, then returns the index just past openCh's
+// balanced matching closeCh — tracking nested "(" / "[" of either kind
+// uniformly (valid parsed syntax is always properly nested, so the first
+// return-to-zero-depth close after the opener is guaranteed to be its true
+// match) and skipping over double-quoted string contents so a bracket
+// character inside a string literal argument is never miscounted. Returns
+// searchFrom unchanged (a defensive no-op) if openCh isn't found or the
+// bracket is unbalanced — exprText below never panics regardless.
+func matchClosingFrom(source string, searchFrom int, openCh, closeCh byte) int {
+	i := searchFrom
+	for i < len(source) && (source[i] == ' ' || source[i] == '\t' || source[i] == '\n' || source[i] == '\r') {
+		i++
+	}
+	if i >= len(source) || source[i] != openCh {
+		return searchFrom
+	}
+
+	depth := 0
+	inString := false
+	for ; i < len(source); i++ {
+		c := source[i]
+		if inString {
+			if c == '\\' {
+				i++
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return searchFrom
+}
+
 // exprText returns the source text n spans, using nodeSpan. Returns "" if
 // the computed span is out of bounds (should not happen for a tree parsed
 // from source, but exprText never panics regardless).
 func exprText(n ast.Node, source string) string {
-	from, to := nodeSpan(n)
+	from, to := nodeSpan(n, source)
 	if from < 0 || to > len(source) || from > to {
 		return ""
 	}

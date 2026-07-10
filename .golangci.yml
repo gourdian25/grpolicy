@@ -1,0 +1,33 @@
+version: "2"
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  enable:
+    - gosec
+    - misspell
+    - gocritic
+    - revive
+  settings:
+    revive:
+      rules:
+        # Engine and Logger are fixed interface shapes; conformance's
+        # newEngine factories and fuzz_test.go's fuzz func legitimately
+        # don't need every parameter named distinctly.
+        - name: unused-parameter
+          disabled: true
+  exclusions:
+    rules:
+      # Test files use test-controlled inputs by design (conformance's
+      # concurrent-stress scenario, the fuzz target's deliberately
+      # malformed input).
+      - path: _test\.go
+        linters: [gosec, errcheck, gocritic]
+      - path: conformance/conformance\.go
+        linters: [gosec, errcheck, gocritic]
+      - path: example/example\.go
+        linters: [gosec, errcheck, gocritic]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

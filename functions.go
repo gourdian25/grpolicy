@@ -38,10 +38,22 @@ type functionRegistry struct {
 
 func newFunctionRegistry() *functionRegistry {
 	r := &functionRegistry{fns: make(map[string]reflect.Value)}
-	r.register("before", func(a, b time.Time) bool { return a.Before(b) })
-	r.register("after", func(a, b time.Time) bool { return a.After(b) })
-	r.register("addDuration", func(t time.Time, d time.Duration) time.Time { return t.Add(d) })
+	mustRegisterBuiltin(r, "before", func(a, b time.Time) bool { return a.Before(b) })
+	mustRegisterBuiltin(r, "after", func(a, b time.Time) bool { return a.After(b) })
+	mustRegisterBuiltin(r, "addDuration", func(t time.Time, d time.Duration) time.Time { return t.Add(d) })
 	return r
+}
+
+// mustRegisterBuiltin registers one of grpolicy's own hardcoded, known-good
+// built-ins. register can only fail for a non-function value or a reserved
+// name — neither is possible for these literal, fixed calls, so a failure
+// here would be a grpolicy programming bug, not a runtime condition; panic
+// rather than silently discard the error (the same "this cannot fail"
+// idiom as regexp.MustCompile).
+func mustRegisterBuiltin(r *functionRegistry, name string, fn any) {
+	if err := r.register(name, fn); err != nil {
+		panic(fmt.Sprintf("grpolicy: internal built-in registration failed for %q: %v", name, err))
+	}
 }
 
 // register stores fn under name, overwriting any existing registration.
