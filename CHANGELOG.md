@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-10
+
+### Fixed
+
+- Removed a stray, empty `LICENCE` (British spelling) that duplicated the
+  real `LICENSE`, and a stray, empty `CHANGELOG.md.gitignore` — both
+  leftover artifacts from the initial commit being copy-pasted from
+  graudit's template.
+
+### Changed
+
+- Bumped `github.com/gourdian25/grlog` to `v0.1.1`.
+
 ## [0.1.0] - 2026-07-10
 
 Initial release. grpolicy is a standalone attribute-based policy/expression
