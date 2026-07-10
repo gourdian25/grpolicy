@@ -46,18 +46,25 @@ func newFunctionRegistry() *functionRegistry {
 
 // register stores fn under name, overwriting any existing registration.
 // Used both for grpolicy's built-ins at construction and for
-// engine.RegisterFunction. Registering a name that collides with an
-// expr-lang/expr reserved builtin identifier (other than the two grpolicy
-// itself implements as BuiltinNode handlers) is rejected outright: a call
-// to that name will always parse as a BuiltinNode and can never reach a
-// registered function, so silently accepting the registration would be a
-// footgun — fail loud at registration time instead.
+// engine.RegisterFunction. Registering any name that collides with an
+// expr-lang/expr reserved builtin identifier is rejected outright — this
+// includes "now" and "duration", not just the other reserved names: a call
+// to any reserved identifier always parses as a BuiltinNode, never a
+// CallNode, so a same-named registered function could never be reached
+// either way. For "now"/"duration" specifically, grpolicy already
+// implements them directly as BuiltinNode handlers in eval.go; for every
+// other reserved name, grpolicy simply doesn't support it. Either way,
+// silently accepting the registration would be a footgun (registered but
+// permanently unreachable) — fail loud at registration time instead.
 func (r *functionRegistry) register(name string, fn any) error {
 	v := reflect.ValueOf(fn)
 	if v.Kind() != reflect.Func {
 		return fmt.Errorf("grpolicy: registering %q: value is not a function", name)
 	}
-	if _, reserved := builtin.Index[name]; reserved && !supportedBuiltinFunctions[name] {
+	if _, reserved := builtin.Index[name]; reserved {
+		if supportedBuiltinFunctions[name] {
+			return fmt.Errorf("grpolicy: registering %q: name is an expr-lang/expr reserved builtin identifier that grpolicy already implements directly as a built-in; it cannot be overridden via RegisterFunction", name)
+		}
 		return fmt.Errorf("grpolicy: registering %q: name collides with an expr-lang/expr reserved builtin identifier; calls to %q always parse as a builtin and can never reach a registered function", name, name)
 	}
 	r.mu.Lock()

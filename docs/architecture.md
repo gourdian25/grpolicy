@@ -131,13 +131,45 @@ grpolicy handles this in two parts:
    `duration(s)` wraps `time.ParseDuration`) — satisfying the spec's
    "now() and date/duration helpers" requirement through the only code path
    that can actually reach them.
-2. **`RegisterFunction` rejects any other reserved name outright**, with a
-   clear error explaining why, rather than silently accepting a registration
-   that could never be invoked. This is the same fail-loud philosophy as
-   decision §5 applied to a different failure mode: a confusing runtime
-   mismatch (registered but unreachable) is worse than an immediate,
-   explicit rejection at registration time.
+2. **`RegisterFunction` rejects *every* reserved name outright — including
+   `now` and `duration` themselves**, not just the ones grpolicy doesn't
+   implement. An earlier version of this code treated `now`/`duration` as an
+   exception and allowed registering them, on the theory that grpolicy
+   "owns" those two names — but that was backwards: a registered `now`
+   function is exactly as unreachable as a registered `len` function, since
+   the parser produces a `BuiltinNode` for either one regardless of what
+   grpolicy itself does internally. This was caught by a hardening test
+   (`FunctionRegistryEdgeCases/ReservedBuiltinNamesRejected`) that asserted
+   registration of `now` should fail, and it initially didn't — a concrete
+   example of why the fail-loud registration check needs its own test
+   rather than being trusted by inspection. The error message distinguishes
+   the two cases for the caller: "grpolicy already implements this
+   directly" for `now`/`duration`, vs. "grpolicy doesn't support this
+   reserved name" for everything else in `builtin.Index`.
 
 `before`, `after`, and `addDuration` — grpolicy's other seeded built-ins —
 are not reserved names and are registered normally through the
 `functionRegistry`, reached via ordinary `*ast.CallNode` dispatch.
+
+## 10. Compiled-policy cache key is the raw, unnormalized source string
+
+`Compile`'s cache (`cache.go`) is keyed by the exact `expr` string passed
+in — no whitespace collapsing, no AST-based canonicalization. `"a && b"` and
+`"a&&b"` are semantically identical but produce two separate cache entries
+and two distinct `CompiledPolicy` values; calling `Compile` twice with
+byte-identical text returns the same cached value. Neither behavior
+(raw-string keying vs. semantic-equivalence keying) is wrong in the
+abstract, but it must be a deliberate, documented, tested choice rather than
+an accidental side effect of "we happened to use the string as a map key" —
+that is the whole point of writing it down here. Raw-string keying was
+chosen for v0.1.0 because it requires no extra work at `Compile` time (no
+AST-normalization pass, no canonical pretty-printer) and because grpolicy's
+anticipated caller (`grauth`) is expected to compile a fixed, small set of
+policy strings defined once in configuration — not a high-cardinality stream
+of dynamically-assembled, whitespace-varying expressions where semantic
+deduplication would meaningfully reduce cache pressure. If that assumption
+turns out to be wrong in practice, semantic-equivalence keying (e.g. hashing
+a normalized re-print of the AST) is a valid v0.2+ change, but it changes
+`WithCacheSize`'s effective capacity semantics and must be re-documented
+here if adopted. Proven by
+`conformance.testCacheKeyIsRawSourceString`.
