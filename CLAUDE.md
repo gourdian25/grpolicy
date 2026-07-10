@@ -2,22 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current state
+## What this is
 
-This repository is an empty scaffold: `go.mod` (module `github.com/gourdian25/grpolicy`, Go 1.26.4), a placeholder `README.md`, an empty `LICENCE`, and `.bark.toml`/`bark.txt`. There is no Go source code, no tests, no build tooling, and no CI configured yet. There are no build/lint/test commands to document until code exists — do not invent a project layout; ask the user what they want to build before scaffolding one.
+grpolicy is a standalone attribute-based policy/expression evaluation engine — not authentication, not authorization, no concept of "user"/"role"/"permission." Given a compiled boolean expression and a `map[string]any` of attributes, `Evaluate` returns a `Decision{Allowed bool, Trace []CheckNode}`. It is the future `grauth` repo's primary dependency: every RBAC/ABAC decision `grauth` makes is meant to route through `grpolicy.Evaluate()`, with `grauth` owning the "who has which role" vocabulary and grpolicy only ever seeing attribute maps. See `docs/plan/grpolicy-plan.md` for the original scope/API spec and `docs/architecture.md` for the specific decisions made while building it (why `expr-lang/expr` over `cel-go`, the short-circuit trace policy, fail-loud missing-key/type-mismatch semantics, the reserved-builtin-name constraint on `RegisterFunction`, etc.) — read `docs/architecture.md` before changing any of those behaviors, since each entry there exists specifically to stop that decision from being silently re-litigated.
 
-`.bark.toml` and `bark.txt` are config/output for "bark", a standalone file-header/tree-generation CLI tool — unrelated to grpolicy's build or runtime, do not treat them as part of the module's logic.
+## Commands
+
+- Build: `go build ./...`
+- Vet: `go vet ./...`
+- Format check: `gofmt -l .` (should be empty; `gofmt -w .` to fix)
+- Test: `go test ./... -race` — `-race` is not optional; the `ConcurrentCompileEvaluateStress` conformance scenario is meaningless without it
+- Run a single scenario: `go test ./... -run TestConformance/ShortCircuitAndTrace -v`
+- The full behavioral suite lives in `conformance/conformance.go` behind `conformance.Run(t, newEngine, opts...)` and is invoked from `grpolicy_test.go`'s `TestConformance`; add new scenarios there, not as ad hoc `_test.go` files scattered across the root package.
+
+## Architecture
+
+- **Parsing vs. evaluation are deliberately split.** `engine.go`'s `Compile` calls `github.com/expr-lang/expr/parser.Parse` — the *only* thing imported from that library's execution path. grpolicy never touches `expr.Compile`/`expr.Run`/`vm.Program`/`expr.Function`. `eval.go` is grpolicy's own tree-walking evaluator over the returned `ast.Node` tree; it builds `CheckNode`s inline as it walks, which is what makes `Decision.Trace` a byproduct of the same walk that produces the result rather than a second, potentially-divergent reimplementation.
+- **`children()` in `ast_helpers.go` is the single source of truth for "what are this node's evaluated sub-expressions."** It's shared by `measureComplexity` (compile-time complexity limits), `validateFunctionCalls` (compile-time function-reference validation), and `buildStub` (`eval.go`'s short-circuit-branch stub builder). If you add a new `ast.Node` kind to the evaluator's type switch, add it here too or these three will silently drift apart.
+- **`now` and `duration` are `*ast.BuiltinNode` cases in `eval.go`, not entries in the `functionRegistry`.** expr-lang/expr's parser reserves a fixed set of bare identifiers (`github.com/expr-lang/expr/builtin.Index`) and always parses a call to one of them as a `BuiltinNode`, never a `CallNode` — regardless of what's registered. `functionRegistry.register` (in `functions.go`) rejects `RegisterFunction` calls for any other reserved name outright, since such a registration could never actually be reached. See `docs/architecture.md` §9 for how this was discovered (empirically, via `go doc` + real `parser.Parse` output — don't assume expr-lang/expr's AST shape from memory if it changes across a version bump; re-verify).
+- **Short-circuit and fail-loud semantics are both proven by falsifying tests, not just implemented.** `conformance.testShortCircuitAndTrace` and `testMissingAttributeKey`/`testTypeMismatch` were manually verified during development to actually fail when the corresponding guarantee was broken (short-circuiting disabled, silent zero-value substitution reintroduced). If you touch `evalAnd`/`evalOr`/`evalIdentifier`/`evalComparison` in `eval.go`, re-run that check rather than trusting that the test merely "passes."
+- **The compiled-policy cache (`cache.go`) is a hand-rolled `container/list` LRU behind a single `sync.Mutex`**, not `sync.Map` — deliberately the simplest thing to reason about. Its concurrency correctness is asserted by `conformance.testConcurrentCompileEvaluateStress` under `-race`, per the ecosystem-wide lesson (from a grevents audit) that a lock that "looks correct on read" must be verified under real concurrent load.
+- **Ecosystem conventions replicated verbatim from grcache/grevents/graudit**: `// File: <path>` as the first line of every `.go` file; `errors.New("grpolicy: ...")` sentinels with no `IsX(err) bool` helpers (use `errors.Is`); the 3-method `Logger` interface (`Infof`/`Warnf`/`Errorf`) with `NopLogger()`/`OrNop()`, never an actual grlog import; `sync.Once`+`atomic.Bool`-guarded idempotent `Close()`.
 
 ## Ecosystem context
 
-The module name and sibling repositories (`grauth`, `graudit`, `grevents`, `grlog`, `grcache`, `gourdiantoken`) indicate this belongs to the "gourdian" ecosystem of Go libraries under github.com/gourdian25, built around auth/authorization concerns:
-
-- `gourdiantoken` — JWT token management (generation, rotation, revocation)
-- `grauth` — authentication
-- `grpolicy` (this repo) — not yet implemented; name suggests an authorization/policy decision component
-- `graudit` — append-only, tamper-evident audit trail (hash-chained)
-- `grevents` — lightweight in-process event bus decoupling producers (e.g. `grauth`) from consumers (e.g. `graudit`, `grcache`)
-- `grlog` — structured logging with pluggable sinks
-- `grcache` — backend-agnostic caching abstraction (one `Cache` interface, multiple backend implementations)
-
-A recurring pattern across these libraries is a narrow interface with swappable backend implementations (e.g. `grcache`'s `Cache` interface, `gourdiantoken`'s `TokenRepository`). If `grpolicy` follows suit, expect a similar interface-plus-backends shape rather than a monolithic implementation — but confirm with the user rather than assuming.
+Sibling repos in the "gourdian" ecosystem under github.com/gourdian25: `gourdiantoken` (JWT management), `grlog` (structured logging), `grcache` (backend-agnostic caching), `grevents` (in-process event bus), `graudit` (tamper-evident audit trail), and the not-yet-built `grauth` (authentication + the primary consumer of this repo). `grauth` follows `grpolicy` directly in the ecosystem's build order.

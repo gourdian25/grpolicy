@@ -75,11 +75,11 @@ type Engine interface {
 type EngineOption func(*engineConfig)
 
 type engineConfig struct {
-	logger      Logger
-	cacheSize   int
-	unbounded   bool
-	maxNodes    int
-	maxDepth    int
+	logger    Logger
+	cacheSize int
+	unbounded bool
+	maxNodes  int
+	maxDepth  int
 }
 
 // WithLogger sets the Logger used for optional diagnostic messages. The
