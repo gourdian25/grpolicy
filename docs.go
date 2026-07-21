@@ -93,11 +93,10 @@
 //
 // Testing:
 //
-// grpolicy's behavioral suite lives in conformance/ and is runnable via
-// conformance.Run(t, newEngine) from any test file, including a future
-// consumer's own integration test. -race is mandatory when running the
-// suite — the ConcurrentCompileEvaluateStress scenario is meaningless
-// without it.
+// grpolicy's behavioral suite lives in the root package's own
+// contract_engine_test.go, run via TestEngine_Contract. -race is mandatory
+// when running the suite — the ConcurrentCompileEvaluateStress scenario is
+// meaningless without it.
 //
 // Out of Scope:
 //

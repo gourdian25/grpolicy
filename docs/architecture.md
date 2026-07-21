@@ -57,7 +57,7 @@ means "this ran and returned false"; the two states are never conflated.
 This is chosen over "only show branches that ran" because a caller debugging
 *why* a decision was DENY usually needs to see the whole authored policy
 shape, including what was skipped, not just what fired. Proven (not just
-implemented) by `conformance.testShortCircuitAndTrace`, which asserts both a
+implemented) by `testShortCircuitAndTrace`, which asserts both a
 call counter of zero *and* the correct `CheckNode` shape — and was verified
 to actually fail when short-circuiting was temporarily disabled during
 development, not just assumed to catch a regression.
@@ -77,17 +77,22 @@ ambiguous. Both failure modes are proven by dedicated falsifying tests
 actually fail when the fail-loud behavior was temporarily replaced with
 silent substitution during development.
 
-## 6. `conformance/`'s reshaped purpose here
+## 6. No separate `conformance/` package
 
 In `grcache`/`graudit`, `conformance/` exists to prove multiple backend
 implementations behave identically through one shared interface. grpolicy
-has exactly one implementation — there is no backend-parity concern to
-prove. `conformance.Run` is kept as a reusable entry point anyway, but its
-purpose is simply "grpolicy's own primary behavioral suite," callable from
-the root package's own tests and, potentially, from a future `grauth`
-integration test. `RunOption` is kept as an unused extension point (matching
-the sibling shape) rather than removed, since a future scenario-specific
-relaxation may need it — but zero options are actually defined at v0.1.0.
+has exactly one implementation — there was never a backend-parity concern
+to prove. It briefly existed anyway as its own importable package (so a
+future `grauth` integration test could reuse it), but was folded into the
+root package's own `contract_engine_test.go` (`runEngineContract`, run via
+`TestEngine_Contract`) for consistency with the rest of the gourdian
+ecosystem's convention of keeping shared behavioral suites as root-package
+test files rather than separately importable packages — `runEngineContract`
+still takes a `newEngine` constructor function, so a future consumer could
+still drive it by copying the pattern, just not by importing it directly.
+The vestigial `RunOption`/`runConfig` extension point (zero options ever
+defined) was dropped in the same pass rather than carried forward, since
+nothing outside the module could construct one anyway once unexported.
 
 ## 7. RE2-only regex guarantee
 
@@ -172,7 +177,7 @@ turns out to be wrong in practice, semantic-equivalence keying (e.g. hashing
 a normalized re-print of the AST) is a valid v0.2+ change, but it changes
 `WithCacheSize`'s effective capacity semantics and must be re-documented
 here if adopted. Proven by
-`conformance.testCacheKeyIsRawSourceString`.
+`testCacheKeyIsRawSourceString`.
 
 ## 11. `CheckNode.Expression` for calls and array literals: bracket-matching, not source-slicing
 
@@ -199,7 +204,7 @@ literal argument is never miscounted. Every other node kind keeps the
 original children-span-union approach, which is sufficient for them.
 
 Added as a regression test,
-`conformance.testExpressionTextIncludesClosingDelimiters`, covering a
+`testExpressionTextIncludesClosingDelimiters`, covering a
 zero-arg call, a one-arg call, a nested call, and an array literal — the
 exact shapes that silently lost their closing delimiter before the fix.
 The lesson generalizes: `Decision.Trace` is a debugging/explainability

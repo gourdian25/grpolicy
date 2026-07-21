@@ -19,8 +19,8 @@ const defaultCacheSize = 512
 // a single mutex — no lock-free cleverness, no sync.Map, no double-checked
 // locking — deliberately the simplest thing to reason about; its
 // correctness under real concurrent Compile/Evaluate load is verified by a
-// dedicated -race test in conformance, not assumed from a static read of
-// this file.
+// dedicated -race test (testConcurrentCompileEvaluateStress in
+// contract_engine_test.go), not assumed from a static read of this file.
 type policyCache struct {
 	mu sync.Mutex
 

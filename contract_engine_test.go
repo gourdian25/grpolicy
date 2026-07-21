@@ -1,16 +1,14 @@
-// File: conformance/conformance.go
+// File: contract_engine_test.go
 
-// Package conformance is grpolicy's own primary behavioral test suite. This
-// is a deliberate reshaping of the sibling repos' conformance/ pattern
-// (grcache, graudit): there, conformance/ exists to prove multiple backend
-// implementations behave identically through one shared interface. grpolicy
-// has exactly one implementation — there is no backend-parity concern to
-// prove — so here Run is simply the reusable entry point for grpolicy's own
-// full scenario list, callable from the root package's tests (and usable by
-// a future consumer, e.g. grauth, as an integration smoke test against its
-// own Engine construction). See docs/architecture.md for this deviation
-// recorded alongside the sibling repos' own documented deviations.
-package conformance
+// contract_engine_test.go is grpolicy's own primary behavioral test suite,
+// run via TestEngine_Contract below against grpolicy.NewEngine. grpolicy
+// has exactly one Engine implementation — there is no backend-parity
+// concern to prove, unlike grcache/graudit's own conformance/ packages —
+// so runEngineContract is simply the reusable entry point for grpolicy's
+// full scenario list, folded directly into the root package's own tests
+// (matching the rest of the gourdian ecosystem's convention) rather than
+// kept as a separately importable package.
+package grpolicy_test
 
 import (
 	"context"
@@ -24,38 +22,12 @@ import (
 	"github.com/gourdian25/grpolicy"
 )
 
-// RunOption configures Run. None are defined yet at v0.1.0 — the type
-// exists now as an extension point, matching grcache's RunOption shape, so
-// a future scenario-specific relaxation can be added without a breaking
-// signature change.
-type RunOption func(*runConfig)
-
-type runConfig struct{}
-
-// Run executes grpolicy's full behavioral suite against a fresh Engine
-// obtained from newEngine for each scenario.
-//
-// Parameters:
-//   - t: *testing.T
-//   - newEngine: func() (grpolicy.Engine, error) — called once per scenario
-//     to get a fresh Engine instance
-//   - opts: ...RunOption — currently always empty; reserved for future use
-//
-// Example:
-//
-//	func TestConformance(t *testing.T) {
-//		conformance.Run(t, func() (grpolicy.Engine, error) {
-//			return grpolicy.NewEngine()
-//		})
-//	}
-func Run(t *testing.T, newEngine func() (grpolicy.Engine, error), opts ...RunOption) {
+// runEngineContract executes grpolicy's full behavioral suite against a
+// fresh Engine obtained from newEngine for each scenario. See
+// TestEngine_Contract below for the entry point that drives it against
+// grpolicy.NewEngine.
+func runEngineContract(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
 	t.Helper()
-
-	cfg := &runConfig{}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	_ = cfg
 
 	t.Run("BooleanOperators", func(t *testing.T) { testBooleanOperators(t, newEngine) })
 	t.Run("ComparisonOperators", func(t *testing.T) { testComparisonOperators(t, newEngine) })
@@ -1305,5 +1277,13 @@ func testExpressionTextIncludesClosingDelimiters(t *testing.T, newEngine func() 
 		if right.Expression != "[1, 2, 3]" {
 			t.Fatalf("array literal Expression = %q, want %q (closing bracket must not be dropped)", right.Expression, "[1, 2, 3]")
 		}
+	})
+}
+
+// TestEngine_Contract runs the full behavioral contract suite above
+// against grpolicy.NewEngine.
+func TestEngine_Contract(t *testing.T) {
+	runEngineContract(t, func() (grpolicy.Engine, error) {
+		return grpolicy.NewEngine()
 	})
 }

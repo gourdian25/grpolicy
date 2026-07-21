@@ -207,10 +207,17 @@ func (w *walker) evalIdentifier(node *ast.IdentifierNode) (any, CheckNode, error
 func (w *walker) evalArray(node *ast.ArrayNode) (any, CheckNode, error) {
 	check := CheckNode{Expression: exprText(node, w.source)}
 	values := make([]any, 0, len(node.Nodes))
-	for _, el := range node.Nodes {
+	for i, el := range node.Nodes {
 		val, elCheck, err := w.eval(el)
 		check.Children = append(check.Children, elCheck)
 		if err != nil {
+			// Stub the remaining not-yet-reached elements so Children
+			// still mirrors the array literal's full static shape, the
+			// same convention evalArgs and every binary-operator eval*
+			// follow for their own not-yet-reached operands/arguments.
+			for _, remaining := range node.Nodes[i+1:] {
+				check.Children = append(check.Children, buildStub(remaining, w.source))
+			}
 			return nil, check, err
 		}
 		values = append(values, val)
@@ -223,10 +230,15 @@ func (w *walker) evalArray(node *ast.ArrayNode) (any, CheckNode, error) {
 func (w *walker) evalArgs(nodes []ast.Node) ([]any, []CheckNode, error) {
 	values := make([]any, 0, len(nodes))
 	checks := make([]CheckNode, 0, len(nodes))
-	for _, n := range nodes {
+	for i, n := range nodes {
 		val, check, err := w.eval(n)
 		checks = append(checks, check)
 		if err != nil {
+			// See evalArray's comment: stub the remaining arguments so
+			// Children still mirrors the call's full static shape.
+			for _, remaining := range nodes[i+1:] {
+				checks = append(checks, buildStub(remaining, w.source))
+			}
 			return nil, checks, err
 		}
 		values = append(values, val)
@@ -239,7 +251,7 @@ func (w *walker) evalCall(node *ast.CallNode) (any, CheckNode, error) {
 
 	ident, ok := node.Callee.(*ast.IdentifierNode)
 	if !ok {
-		return nil, check, fmt.Errorf("grpolicy: unsupported call target: %T", node.Callee)
+		return nil, check, fmt.Errorf("grpolicy: unsupported call target: %T: %w", node.Callee, ErrCompileFailed)
 	}
 
 	args, argChecks, err := w.evalArgs(node.Arguments)

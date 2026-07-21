@@ -4,7 +4,7 @@
 
 GO := go
 MODULE := github.com/gourdian25/grpolicy
-COVERAGE_MIN := 80
+COVERAGE_MIN := 95
 VERSION ?=
 FUZZTIME ?= 3m
 
@@ -48,10 +48,10 @@ coverage-summary:
 	@$(GO) test -coverprofile=coverage.out ./...
 	@$(GO) tool cover -func=coverage.out
 
-# The conformance package (no _test.go of its own — see
-# docs/architecture.md §6 for why it's shaped this way) and example (a
-# runnable demo, not library code under test) are skipped, matching
-# grcache/graudit's own coverage-check convention.
+# example (a runnable demo, not library code under test) is skipped,
+# matching grcache/graudit's own coverage-check convention. The former
+# conformance package was folded into the root package's own
+# contract_engine_test.go, so there is nothing else to exclude.
 coverage-check:
 	@echo "Checking the root package meets $(COVERAGE_MIN)% coverage..."
 	@out=$$($(GO) test -cover . 2>&1); \

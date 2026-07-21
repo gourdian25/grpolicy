@@ -34,10 +34,13 @@ type Engine interface {
 	//
 	// Returns:
 	//   - CompiledPolicy: a reusable, concurrency-safe compiled form
-	//   - error: ErrCompileFailed if expr does not parse, ErrTooComplex if
-	//     it exceeds the configured node-count/depth limit,
-	//     ErrUnknownFunction if it calls a name not registered via
-	//     RegisterFunction, ErrClosed if called after Close
+	//   - error: ErrCompileFailed if expr does not parse, or parses into a
+	//     structurally unsupported shape (e.g. a member/method-style call
+	//     target like "a.b()", which grpolicy does not support — only a
+	//     bare identifier callee); ErrTooComplex if it exceeds the
+	//     configured node-count/depth limit; ErrUnknownFunction if it
+	//     calls a name not registered via RegisterFunction; ErrClosed if
+	//     called after Close
 	//
 	// Example:
 	//
@@ -224,7 +227,7 @@ func validateFunctionCalls(n ast.Node, fns *functionRegistry) error {
 	case *ast.CallNode:
 		ident, ok := node.Callee.(*ast.IdentifierNode)
 		if !ok {
-			return fmt.Errorf("grpolicy: unsupported call target: %T", node.Callee)
+			return fmt.Errorf("grpolicy: unsupported call target: %T: %w", node.Callee, ErrCompileFailed)
 		}
 		if !fns.has(ident.Value) {
 			return fmt.Errorf("grpolicy: %q: %w", ident.Value, ErrUnknownFunction)

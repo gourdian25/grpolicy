@@ -197,13 +197,13 @@ means grpolicy logs nothing.
 ```sh
 make test             # go test -cover ./...
 make race             # go test -race ./...  (mandatory before any commit touching eval.go or cache.go)
-make coverage-check   # verify the root package meets 80% coverage
+make coverage-check   # verify the root package meets 95% coverage
 make fuzz             # fuzz Compile+Evaluate for 3m (FUZZTIME=... to override)
 make bench             # go test -bench=. -benchmem -benchtime=10s ./...
 make lint              # golangci-lint run ./...
 ```
 
-`conformance/` is grpolicy's own primary behavioral suite (not a
+`contract_engine_test.go` is grpolicy's own primary behavioral suite (not a
 backend-parity suite — there's only one implementation; see
 `docs/architecture.md` §6), covering every operator, the short-circuit
 trace guarantee, fail-loud semantics, complexity limits, timeouts,

@@ -1,13 +1,15 @@
 .
-├── CHANGELOG.md.gitignore
+├── CHANGELOG.md
 ├── CLAUDE.md
-├── LICENCE
+├── LICENSE
+├── Makefile
 ├── README.md
+├── SECURITY.md
 ├── ast_helpers.go
 ├── cache.go
 ├── complexity_internal_test.go
-├── conformance/
-│   └── conformance.go
+├── contract_engine_test.go
+├── coverage_test.go
 ├── docs/
 │   ├── architecture.md
 │   └── plan/
@@ -16,12 +18,14 @@
 ├── engine.go
 ├── errors.go
 ├── eval.go
+├── example/
+│   └── example.go
 ├── functions.go
 ├── fuzz_test.go
 ├── go.mod
 ├── go.sum
-├── grpolicy_test.go
+├── internal_coverage_test.go
 ├── logger.go
 └── policy.go
 
-3 directories, 21 files
+3 directories, 25 files
