@@ -16,6 +16,44 @@ will own the vocabulary of "who has which role"; grpolicy only ever sees
 attribute maps, and every RBAC/ABAC decision grauth makes is meant to route
 through `grpolicy.Evaluate`.
 
+## Part of the gourdian25 ecosystem
+
+grpolicy is one of several small, independent Go libraries meant to be used
+together:
+
+- [gourdiantoken](https://github.com/gourdian25/gourdiantoken) — JWT
+  access/refresh token issuance, verification, revocation, and rotation.
+- [grlog](https://github.com/gourdian25/grlog) — zero-dependency structured
+  logging; grpolicy's optional `Logger` interface is satisfied by it
+  directly.
+- [grcache](https://github.com/gourdian25/grcache) — backend-agnostic
+  caching abstraction (Redis, Postgres, Mongo, memcached, in-memory).
+- [grevents](https://github.com/gourdian25/grevents) — an in-process event
+  bus for decoupling producers of state changes from consumers that react
+  to them.
+- [graudit](https://github.com/gourdian25/graudit) — an append-only,
+  tamper-evident audit log with pluggable storage backends.
+- [grauth](https://github.com/gourdian25/grauth) (not yet built) — the
+  ecosystem's authentication/authorization layer and grpolicy's primary
+  consumer; every RBAC/ABAC decision it makes is meant to route through
+  `grpolicy.Evaluate`.
+
+## Table of Contents
+
+- [The precise claim](#the-precise-claim-read-this-before-trusting-decisiontrace)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Expression language](#expression-language)
+- [Custom functions](#custom-functions)
+- [Error handling](#error-handling)
+- [Complexity limits and timeouts](#complexity-limits-and-timeouts)
+- [Compiled-policy caching](#compiled-policy-caching)
+- [Logger](#logger)
+- [Testing](#testing)
+- [Out of scope (v0.1.0)](#out-of-scope-v010)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## The precise claim (read this before trusting `Decision.Trace`)
 
 `Decision.Trace` reflects the full static shape of the compiled expression
@@ -213,6 +251,10 @@ concurrent `-race` cache-stress scenario. `FuzzCompileEvaluate` fuzzes
 live services required for any of grpolicy's own tests, since it's a pure
 computation engine with no storage backend.
 
+Current root-package coverage is **99.8%**, verified via `make
+coverage-check` on 2026-07-22 — comfortably above the 95% gate that command
+enforces.
+
 ## Out of scope (v0.1.0)
 
 Any RBAC/ABAC data modeling — grpolicy has no "role" or "permission" as a
@@ -222,6 +264,13 @@ the expression string anywhere; where it comes from is entirely the
 caller's problem. Nested/hierarchical attribute paths
 (`user.address.city`) — a v0.2+ candidate. A policy authoring UI or CLI
 validator tool.
+
+## Contributing
+
+Issues and PRs are welcome at
+[github.com/gourdian25/grpolicy](https://github.com/gourdian25/grpolicy).
+Please run `make lint`, `make test`, and `make race` before submitting (see
+Testing above for what each covers).
 
 ## License
 

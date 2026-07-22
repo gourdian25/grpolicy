@@ -64,6 +64,16 @@ coverage): no breaking API changes.
   each, so the aggregate percentage `coverage-check` gates on is
   unaffected).
 
+### Documentation
+
+- README: added a "Part of the gourdian25 ecosystem" section (naming every
+  sibling repo plus the not-yet-built `grauth`) and a Table of Contents,
+  matching the format already used by `grlog`/`grevents`.
+- README: added a brief Contributing section (previously none) pointing at
+  `make lint`, `make test`, and `make race`, and stated the actual verified
+  test-coverage figure (99.8% on the root package, `make coverage-check`,
+  2026-07-22) near the Testing section.
+
 ## [0.1.1] - 2026-07-10
 
 ### Fixed
