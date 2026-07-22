@@ -226,16 +226,23 @@ keying was chosen over AST-based normalization.
 ## Logger
 
 ```go
-import "github.com/gourdian25/grlog"
+import (
+	"log/slog"
 
-logger := grlog.NewDefaultLogger()
-engine, err := grpolicy.NewEngine(grpolicy.WithLogger(logger)) // *grlog.Logger satisfies grpolicy.Logger directly
+	"github.com/gourdian25/grlog"
+)
+
+logger := slog.New(grlog.NewSlogHandler(grlog.NewDefaultLogger()))
+engine, err := grpolicy.NewEngine(grpolicy.WithLogger(logger)) // *slog.Logger satisfies grpolicy.Logger directly
 ```
 
 grpolicy accepts any logger satisfying its own small `Logger` interface
-(`Infof`/`Warnf`/`Errorf`) — the same three-method shape every sibling repo
-uses. grpolicy itself never imports grlog; a `nil` Logger (the default)
-means grpolicy logs nothing.
+(`Debug`/`Info`/`Warn`/`Error(msg string, args ...any)`) — the same
+`log/slog`-shaped signatures every sibling repo uses, and the same shape
+`*slog.Logger` itself has, so any slog-based logger works with no adapter.
+grpolicy itself never imports grlog or log/slog; a `nil` Logger (the
+default) means grpolicy logs nothing. See CONVENTIONS.md at the workspace
+root for the ecosystem's logging level philosophy and known limitations.
 
 ## Testing
 

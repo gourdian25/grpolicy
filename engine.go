@@ -197,7 +197,7 @@ func (e *engine) Compile(expr string) (CompiledPolicy, error) {
 		regexCache: make(map[string]*regexp.Regexp),
 	}
 	e.cache.put(expr, p)
-	e.logger.Infof("grpolicy: compiled policy %q (%d nodes, depth %d)", expr, nodeCount, depth)
+	e.logger.Info("grpolicy: compiled policy", "source", expr, "nodes", nodeCount, "depth", depth)
 	return p, nil
 }
 
@@ -211,7 +211,7 @@ func (e *engine) RegisterFunction(name string, fn any) error {
 func (e *engine) Close() error {
 	e.closeOnce.Do(func() {
 		e.closed.Store(true)
-		e.logger.Infof("grpolicy: engine closed")
+		e.logger.Info("grpolicy: engine closed")
 	})
 	return nil
 }

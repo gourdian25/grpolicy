@@ -974,13 +974,16 @@ type capturingLogger struct {
 	messages []string
 }
 
-func (l *capturingLogger) Infof(format string, args ...interface{}) {
+func (l *capturingLogger) Debug(msg string, args ...any) { l.record(msg) }
+func (l *capturingLogger) Info(msg string, args ...any)  { l.record(msg) }
+func (l *capturingLogger) Warn(msg string, args ...any)  { l.record(msg) }
+func (l *capturingLogger) Error(msg string, args ...any) { l.record(msg) }
+
+func (l *capturingLogger) record(msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.messages = append(l.messages, fmt.Sprintf(format, args...))
+	l.messages = append(l.messages, msg)
 }
-func (l *capturingLogger) Warnf(format string, args ...interface{})  { l.Infof(format, args...) }
-func (l *capturingLogger) Errorf(format string, args ...interface{}) { l.Infof(format, args...) }
 
 func (l *capturingLogger) count() int {
 	l.mu.Lock()

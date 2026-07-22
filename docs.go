@@ -33,8 +33,9 @@
 //   - Sentinel errors (ErrCompileFailed, ErrTooComplex, ErrUnknownFunction,
 //     ErrEvaluationTimeout, ErrTypeMismatch, ErrAttributeMissing,
 //     ErrClosed) usable with errors.Is
-//   - Optional diagnostic logging via any logger satisfying the small
-//     Logger interface — grlog.Logger works with no adapter
+//   - Optional diagnostic logging via any logger satisfying the small,
+//     log/slog-shaped Logger interface — *slog.Logger works with no
+//     adapter, and so does slog.New(grlog.NewSlogHandler(...))
 //
 // # Getting Started
 //
