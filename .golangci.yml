@@ -18,12 +18,10 @@ linters:
           disabled: true
   exclusions:
     rules:
-      # Test files use test-controlled inputs by design (conformance's
-      # concurrent-stress scenario, the fuzz target's deliberately
+      # Test files use test-controlled inputs by design (the contract
+      # suite's concurrent-stress scenario, the fuzz target's deliberately
       # malformed input).
       - path: _test\.go
-        linters: [gosec, errcheck, gocritic]
-      - path: conformance/conformance\.go
         linters: [gosec, errcheck, gocritic]
       - path: example/example\.go
         linters: [gosec, errcheck, gocritic]

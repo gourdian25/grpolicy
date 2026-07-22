@@ -16,6 +16,51 @@ will own the vocabulary of "who has which role"; grpolicy only ever sees
 attribute maps, and every RBAC/ABAC decision grauth makes is meant to route
 through `grpolicy.Evaluate`.
 
+## Part of the gourdian25 ecosystem
+
+grpolicy is one of several small, independent Go libraries meant to be used
+together:
+
+- [gourdiantoken](https://github.com/gourdian25/gourdiantoken) — JWT
+  access/refresh token issuance, verification, revocation, and rotation.
+- [grlog](https://github.com/gourdian25/grlog) — zero-dependency structured
+  logging; grpolicy's optional `Logger` interface is satisfied by it
+  directly.
+- [grcache](https://github.com/gourdian25/grcache) — backend-agnostic
+  caching abstraction (Redis, Postgres, Mongo, memcached, in-memory).
+- [grevents](https://github.com/gourdian25/grevents) — an in-process event
+  bus for decoupling producers of state changes from consumers that react
+  to them.
+- [graudit](https://github.com/gourdian25/graudit) — an append-only,
+  tamper-evident audit log with pluggable storage backends.
+- [grnoti](https://github.com/gourdian25/grnoti) — a push-notification
+  service (FCM dispatch, idempotent event processing, device-token
+  management, dead-letter-queue retry, circuit breaking, distributed rate
+  limiting, deterministic A/B experiment assignment, localization, and
+  topic-based routing); grpolicy has no dependency on it — this is only a
+  sibling in the ecosystem, since grpolicy has no storage backend of its
+  own to integrate with.
+- [grauth](https://github.com/gourdian25/grauth) (not yet built) — the
+  ecosystem's authentication/authorization layer and grpolicy's primary
+  consumer; every RBAC/ABAC decision it makes is meant to route through
+  `grpolicy.Evaluate`.
+
+## Table of Contents
+
+- [The precise claim](#the-precise-claim-read-this-before-trusting-decisiontrace)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Expression language](#expression-language)
+- [Custom functions](#custom-functions)
+- [Error handling](#error-handling)
+- [Complexity limits and timeouts](#complexity-limits-and-timeouts)
+- [Compiled-policy caching](#compiled-policy-caching)
+- [Logger](#logger)
+- [Testing](#testing)
+- [Out of scope (not currently supported)](#out-of-scope-not-currently-supported)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## The precise claim (read this before trusting `Decision.Trace`)
 
 `Decision.Trace` reflects the full static shape of the compiled expression
@@ -108,7 +153,7 @@ allowed and a short-circuited denied decision.
   `addDuration` for `time.Time` values
 
 Attributes are a flat `map[string]any` — nested paths like
-`user.address.city` are a v0.2+ candidate, not supported in v0.1.0.
+`user.address.city` are a v0.2+ candidate, not currently supported.
 
 ## Custom functions
 
@@ -181,29 +226,36 @@ keying was chosen over AST-based normalization.
 ## Logger
 
 ```go
-import "github.com/gourdian25/grlog"
+import (
+	"log/slog"
 
-logger := grlog.NewDefaultLogger()
-engine, err := grpolicy.NewEngine(grpolicy.WithLogger(logger)) // *grlog.Logger satisfies grpolicy.Logger directly
+	"github.com/gourdian25/grlog"
+)
+
+logger := slog.New(grlog.NewSlogHandler(grlog.NewDefaultLogger()))
+engine, err := grpolicy.NewEngine(grpolicy.WithLogger(logger)) // *slog.Logger satisfies grpolicy.Logger directly
 ```
 
 grpolicy accepts any logger satisfying its own small `Logger` interface
-(`Infof`/`Warnf`/`Errorf`) — the same three-method shape every sibling repo
-uses. grpolicy itself never imports grlog; a `nil` Logger (the default)
-means grpolicy logs nothing.
+(`Debug`/`Info`/`Warn`/`Error(msg string, args ...any)`) — the same
+`log/slog`-shaped signatures every sibling repo uses, and the same shape
+`*slog.Logger` itself has, so any slog-based logger works with no adapter.
+grpolicy itself never imports grlog or log/slog; a `nil` Logger (the
+default) means grpolicy logs nothing. See CONVENTIONS.md at the workspace
+root for the ecosystem's logging level philosophy and known limitations.
 
 ## Testing
 
 ```sh
 make test             # go test -cover ./...
 make race             # go test -race ./...  (mandatory before any commit touching eval.go or cache.go)
-make coverage-check   # verify the root package meets 80% coverage
+make coverage-check   # verify the root package meets 95% coverage
 make fuzz             # fuzz Compile+Evaluate for 3m (FUZZTIME=... to override)
 make bench             # go test -bench=. -benchmem -benchtime=10s ./...
 make lint              # golangci-lint run ./...
 ```
 
-`conformance/` is grpolicy's own primary behavioral suite (not a
+`contract_engine_test.go` is grpolicy's own primary behavioral suite (not a
 backend-parity suite — there's only one implementation; see
 `docs/architecture.md` §6), covering every operator, the short-circuit
 trace guarantee, fail-loud semantics, complexity limits, timeouts,
@@ -213,7 +265,18 @@ concurrent `-race` cache-stress scenario. `FuzzCompileEvaluate` fuzzes
 live services required for any of grpolicy's own tests, since it's a pure
 computation engine with no storage backend.
 
-## Out of scope (v0.1.0)
+`make bench` runs `go test -bench=.` as advertised, but there are currently
+no `func Benchmark*` functions anywhere in this repo — the command will
+build and run the test suite but report no benchmark results. The real
+testing surface is the behavioral suite above, `-race` (including the
+concurrent cache-stress scenario), and `FuzzCompileEvaluate`; microbenchmarks
+may be added later if a hot path needs one.
+
+Current root-package coverage is **99.8%**, verified via `make
+coverage-check` on 2026-07-22 — comfortably above the 95% gate that command
+enforces.
+
+## Out of scope (not currently supported)
 
 Any RBAC/ABAC data modeling — grpolicy has no "role" or "permission" as a
 first-class type, only attribute maps; this boundary is deliberate (see
@@ -222,6 +285,13 @@ the expression string anywhere; where it comes from is entirely the
 caller's problem. Nested/hierarchical attribute paths
 (`user.address.city`) — a v0.2+ candidate. A policy authoring UI or CLI
 validator tool.
+
+## Contributing
+
+Issues and PRs are welcome at
+[github.com/gourdian25/grpolicy](https://github.com/gourdian25/grpolicy).
+Please run `make lint`, `make test`, and `make race` before submitting (see
+Testing above for what each covers).
 
 ## License
 

@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Ecosystem-wide Stage 2 pass (test structure + a couple of real bug fixes +
+coverage): no breaking API changes.
+
+### Changed (breaking)
+
+- `Logger`'s three printf-style methods (`Infof`/`Warnf`/`Errorf(format
+  string, args ...interface{})`) replaced with four `log/slog`-shaped
+  methods (`Debug`/`Info`/`Warn`/`Error(msg string, args ...any)`), matching
+  `*slog.Logger`'s own signatures exactly so any slog-based logger —
+  including `*grlog.Logger` via `slog.New(grlog.NewSlogHandler(...))` —
+  satisfies it with no adapter. Allowed pre-1.0; consistent with the same
+  change landing across grcache/grevents/graudit/grnoti in this pass.
+  Real structured field values (previously flattened into printf format
+  strings) now reach any structured-output logger intact.
+
+### Changed
+
+- Folded the standalone `conformance` package into the root package as
+  `contract_engine_test.go` (`runEngineContract`, run via
+  `TestEngine_Contract`), matching the rest of the gourdian ecosystem's
+  convention of keeping shared behavioral suites as root-package test files
+  rather than a separately importable package. The vestigial, never-used
+  `RunOption`/`runConfig` extension point was dropped in the same pass. See
+  `docs/architecture.md` §6.
+- `make coverage-check`'s threshold raised from 80% to 95%.
+
+### Fixed
+
+- `Evaluate`'s array-literal and function-call argument evaluation
+  (`evalArray`, `evalArgs` in `eval.go`) now stub every not-yet-reached
+  element/argument in `Decision.Trace.Children` when an earlier one fails,
+  mirroring the convention every binary operator (`&&`, `==`, `contains`,
+  `matches`, `in`, ...) already followed for its own unevaluated sibling.
+  Previously, `Children` for an array or call expression was silently
+  shorter than the expression's actual element/argument count whenever an
+  error occurred partway through — a real inconsistency for any caller
+  relying on `Trace` mirroring the compiled expression's full static shape.
+- `Compile`'s (and `Evaluate`'s own defensive duplicate check's) rejection
+  of a non-identifier call target (e.g. `a.b()`, member/method-call syntax
+  grpolicy doesn't support) now wraps `ErrCompileFailed`. Previously this
+  error wrapped no sentinel at all, so `errors.Is(err, ErrCompileFailed)`
+  returned false for it — inconsistent with every other `Compile` failure
+  mode, and undocumented on `Compile`'s own doc comment.
+
+### Testing
+
+- Coverage raised to 99.8% on the root package (previously 88.7%), closing
+  nearly every gap: unimplemented binary/unary operators only caught at
+  Evaluate time (grpolicy validates function calls at Compile time but not
+  arbitrary operators), `&&`/`||`/comparison/string-op/matches erroring on
+  either operand, the two new array/call stub branches above, a reserved
+  builtin name grpolicy doesn't implement (`len`, `all`), nested
+  unknown-function errors, function-registry arity/type/conversion edge
+  cases (variadic minimum-argument checks, nil-argument zero-valuing,
+  numeric-vs-non-numeric conversion rejection, a single-`error`-return
+  function), grpolicy's own hardcoded `before`/`after`/`addDuration`
+  built-ins (registered but never previously invoked by any test), and a
+  handful of purely defensive branches unreachable from the public API
+  alone — covered in a new `internal_coverage_test.go` (white-box,
+  `package grpolicy`) by constructing AST nodes or calling unexported
+  helpers directly, the same technique used elsewhere in the gourdian
+  ecosystem. Two gaps remain and are accepted as permanent: `cache.go`'s
+  `back == nil` guard in `policyCache.put`'s eviction loop (structurally
+  unreachable — the loop's own condition guarantees a non-empty list) and
+  `noopLogger`'s three single-line no-op methods (a Go tooling artifact for
+  completely empty function bodies — they contribute 0 total statements
+  each, so the aggregate percentage `coverage-check` gates on is
+  unaffected).
+
+### Documentation
+
+- README: added a "Part of the gourdian25 ecosystem" section (naming every
+  sibling repo plus the not-yet-built `grauth`) and a Table of Contents,
+  matching the format already used by `grlog`/`grevents`.
+- README: added a brief Contributing section (previously none) pointing at
+  `make lint`, `make test`, and `make race`, and stated the actual verified
+  test-coverage figure (99.8% on the root package, `make coverage-check`,
+  2026-07-22) near the Testing section.
+
 ## [0.1.1] - 2026-07-10
 
 ### Fixed

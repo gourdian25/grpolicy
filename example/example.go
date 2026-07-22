@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 
 	"github.com/gourdian25/grlog"
 
@@ -18,10 +19,12 @@ import (
 )
 
 func main() {
-	// *grlog.Logger satisfies grpolicy.Logger with no adapter — the same
+	// *slog.Logger satisfies grpolicy.Logger with no adapter — the same
 	// zero-import pattern every sibling repo uses (grpolicy's own code
-	// never imports grlog; only this example does, to demonstrate it).
-	logger := grlog.NewDefaultLogger()
+	// never imports grlog or log/slog; only this example does, to
+	// demonstrate the recommended slog.New(grlog.NewSlogHandler(...))
+	// bridge).
+	logger := slog.New(grlog.NewSlogHandler(grlog.NewDefaultLogger()))
 
 	engine, err := grpolicy.NewEngine(grpolicy.WithLogger(logger))
 	if err != nil {
