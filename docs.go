@@ -3,7 +3,7 @@
 // Package grpolicy provides a standalone attribute-based policy/expression
 // evaluation engine for the gourdian ecosystem.
 //
-// Overview:
+// # Overview
 //
 // grpolicy is not authentication and not authorization — it knows nothing
 // about "users," "roles," or "permissions." Given a compiled boolean
@@ -14,7 +14,7 @@
 // with grauth owning the vocabulary of "who has which role" and grpolicy
 // only ever seeing attribute maps.
 //
-// Key Features:
+// # Key Features
 //   - Boolean logic (&&, ||, !/not), comparisons (==, !=, <, <=, >, >=),
 //     string operators (contains, startsWith, endsWith, regex matches), and
 //     membership (in) against slices, arrays, and map keys
@@ -36,7 +36,7 @@
 //   - Optional diagnostic logging via any logger satisfying the small
 //     Logger interface — grlog.Logger works with no adapter
 //
-// Getting Started:
+// # Getting Started
 //
 //	import (
 //		"context"
@@ -68,7 +68,7 @@
 //		log.Println(decision.Allowed) // true
 //	}
 //
-// Architecture:
+// # Architecture
 //
 // grpolicy uses github.com/expr-lang/expr for exactly one thing: parsing
 // source text into an AST (parser.Parse). It never calls that library's own
@@ -91,14 +91,14 @@
 // traffic is verified by a dedicated -race stress test, not assumed from a
 // static read of the locking code.
 //
-// Testing:
+// # Testing
 //
 // grpolicy's behavioral suite lives in the root package's own
 // contract_engine_test.go, run via TestEngine_Contract. -race is mandatory
 // when running the suite — the ConcurrentCompileEvaluateStress scenario is
 // meaningless without it.
 //
-// Out of Scope:
+// # Out of Scope
 //
 // grpolicy has no concept of "role" or "permission" as first-class types —
 // only attribute maps; if implementation pressure from a future grauth
@@ -106,9 +106,9 @@
 // the boundary is wrong, not a reason to add it. grpolicy never persists
 // policy text anywhere — where the expression string comes from (a config
 // file, a database row, a hardcoded string) is entirely the caller's
-// problem. Attribute paths are flat (map[string]any) in v0.1.0; nested
-// access like user.address.city is a v0.2+ candidate. There is no policy
-// authoring UI or CLI validator tool.
+// problem. Attribute paths are flat (map[string]any); nested access like
+// user.address.city is not currently supported (a v0.2+ candidate). There
+// is no policy authoring UI or CLI validator tool.
 //
 // License: MIT
 // Repository: https://github.com/gourdian25/grpolicy

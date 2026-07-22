@@ -33,6 +33,13 @@ together:
   to them.
 - [graudit](https://github.com/gourdian25/graudit) — an append-only,
   tamper-evident audit log with pluggable storage backends.
+- [grnoti](https://github.com/gourdian25/grnoti) — a push-notification
+  service (FCM dispatch, idempotent event processing, device-token
+  management, dead-letter-queue retry, circuit breaking, distributed rate
+  limiting, deterministic A/B experiment assignment, localization, and
+  topic-based routing); grpolicy has no dependency on it — this is only a
+  sibling in the ecosystem, since grpolicy has no storage backend of its
+  own to integrate with.
 - [grauth](https://github.com/gourdian25/grauth) (not yet built) — the
   ecosystem's authentication/authorization layer and grpolicy's primary
   consumer; every RBAC/ABAC decision it makes is meant to route through
@@ -50,7 +57,7 @@ together:
 - [Compiled-policy caching](#compiled-policy-caching)
 - [Logger](#logger)
 - [Testing](#testing)
-- [Out of scope (v0.1.0)](#out-of-scope-v010)
+- [Out of scope (not currently supported)](#out-of-scope-not-currently-supported)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -146,7 +153,7 @@ allowed and a short-circuited denied decision.
   `addDuration` for `time.Time` values
 
 Attributes are a flat `map[string]any` — nested paths like
-`user.address.city` are a v0.2+ candidate, not supported in v0.1.0.
+`user.address.city` are a v0.2+ candidate, not currently supported.
 
 ## Custom functions
 
@@ -251,11 +258,18 @@ concurrent `-race` cache-stress scenario. `FuzzCompileEvaluate` fuzzes
 live services required for any of grpolicy's own tests, since it's a pure
 computation engine with no storage backend.
 
+`make bench` runs `go test -bench=.` as advertised, but there are currently
+no `func Benchmark*` functions anywhere in this repo — the command will
+build and run the test suite but report no benchmark results. The real
+testing surface is the behavioral suite above, `-race` (including the
+concurrent cache-stress scenario), and `FuzzCompileEvaluate`; microbenchmarks
+may be added later if a hot path needs one.
+
 Current root-package coverage is **99.8%**, verified via `make
 coverage-check` on 2026-07-22 — comfortably above the 95% gate that command
 enforces.
 
-## Out of scope (v0.1.0)
+## Out of scope (not currently supported)
 
 Any RBAC/ABAC data modeling — grpolicy has no "role" or "permission" as a
 first-class type, only attribute maps; this boundary is deliberate (see
