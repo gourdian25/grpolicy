@@ -1,4 +1,4 @@
 github.com/expr-lang/expr v1.17.8 h1:W1loDTT+0PQf5YteHSTpju2qfUfNoBt4yw9+wOEU9VM=
 github.com/expr-lang/expr v1.17.8/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=
-github.com/gourdian25/grlog v0.1.1 h1:S0spb+e6sMAXqi0qgizBCQxDL1HfkZt0pfWTINQb/UI=
-github.com/gourdian25/grlog v0.1.1/go.mod h1:EAH3pwL1Ow+NT035nYsfzRDAT3/rFvfTpFMVl/CVHbM=
+github.com/gourdian25/grlog v0.1.2 h1:ucgHnaPWtrWKQJismJPP0Lc/GmXMQnf5I9bN63vCL/Y=
+github.com/gourdian25/grlog v0.1.2/go.mod h1:EAH3pwL1Ow+NT035nYsfzRDAT3/rFvfTpFMVl/CVHbM=
