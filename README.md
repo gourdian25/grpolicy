@@ -11,10 +11,16 @@ grpolicy is **not** authentication and **not** authorization — it has no
 concept of "user," "role," or "permission." Given a compiled boolean
 expression and a `map[string]any` of attributes, it returns a boolean
 decision plus an explainable trace of exactly how that decision was
-reached. [grauth](https://github.com/gourdian25/grauth) (not yet built)
-will own the vocabulary of "who has which role"; grpolicy only ever sees
-attribute maps, and every RBAC/ABAC decision grauth makes is meant to route
-through `grpolicy.Evaluate`.
+reached.
+
+It exists to turn attribute-based access checks and business rules — the
+kind of logic that otherwise ends up as scattered, hard-to-audit `if`
+statements — into a single compiled expression that can be evaluated
+repeatedly and cheaply against different attribute values, while staying
+**explainable**: every decision comes back with a full trace of which
+sub-expressions actually ran and what they returned, not just a bare
+`true`/`false`. A missing attribute or a type mismatch is always a loud,
+typed error, never a silently wrong answer.
 
 ## Part of the gourdian25 ecosystem
 
@@ -40,10 +46,6 @@ together:
   topic-based routing); grpolicy has no dependency on it — this is only a
   sibling in the ecosystem, since grpolicy has no storage backend of its
   own to integrate with.
-- [grauth](https://github.com/gourdian25/grauth) (not yet built) — the
-  ecosystem's authentication/authorization layer and grpolicy's primary
-  consumer; every RBAC/ABAC decision it makes is meant to route through
-  `grpolicy.Evaluate`.
 
 ## Table of Contents
 
@@ -151,9 +153,39 @@ allowed and a short-circuited denied decision.
   `map[string]any`'s keys
 - **Built-ins**: `now()`, `duration("1h")`, plus `before`/`after`/
   `addDuration` for `time.Time` values
-
-Attributes are a flat `map[string]any` — nested paths like
-`user.address.city` are a v0.2+ candidate, not currently supported.
+- **Nested attribute access**: dot (`resource.ownerID`) and bracket
+  (`resource["ownerID"]`, `items[0]`) syntax are equivalent — both compile to
+  the same underlying node and produce the same `Decision.Trace` shape.
+  Supported against `map[string]any`, general `map[K]V` values (key
+  converted numerically where applicable), and slices/arrays (any integer
+  index type, no float truncation). Multi-level chains (`a.b.c`) work the
+  same way. A missing map key, an out-of-range slice/array index, or a nil
+  intermediate value is `ErrAttributeMissing`; a property of the wrong shape
+  for its base (e.g. a string key against a slice, or indexing into a plain
+  Go `string`) is `ErrTypeMismatch` — the same fail-loud rules as any other
+  attribute access, never silently coerced. Also supported against a Go
+  `struct` (or pointer to one, dereferenced automatically through any number
+  of pointer levels): `resource.OwnerID` reads the exported field `OwnerID`
+  via reflection, including embedded/promoted fields. Field names are
+  case-sensitive, exact Go identifiers — `resource.ownerID` (lowercase) does
+  not match a field named `OwnerID`. An unexported field is reported exactly
+  like a nonexistent one (`ErrAttributeMissing`), never exposed even by
+  probing; method calls (`resource.Method()`) remain unsupported.
+- **Optional chaining**: `a?.b`, `a?.[0]`, multi-link chains like
+  `a.b?.c?.d`. `?.` guards against a **nil** value only — it never
+  suppresses a missing map key, out-of-range index, or unknown/unexported
+  struct field, all of which stay `ErrAttributeMissing` regardless of `?.`
+  anywhere in the expression. Once the first `?.` is reached walking
+  outward from the base, every subsequent **dot** link tunnels a nil
+  through to the end of the chain without evaluating anything further
+  (`a?.b.c.d` never touches `.c`/`.d` if `a` is nil); a link written
+  *before* the first `?.` is never protected (`a.b?.c` still fails loud on
+  a nil `a`). This matches `expr-lang/expr`'s own real parser/VM semantics
+  exactly, including one non-obvious asymmetry: a **bracket**-index
+  continuation immediately after a closed optional chain is *not*
+  protected (`a?.b[0]` still fails loud on a nil `a`) — only a bracket step
+  that is itself optional (`a?.b?.[0]`) tunnels. See `docs/architecture.md`
+  §12 for the full rule and how it was verified against the real library.
 
 ## Custom functions
 
@@ -279,11 +311,14 @@ enforces.
 ## Out of scope (not currently supported)
 
 Any RBAC/ABAC data modeling — grpolicy has no "role" or "permission" as a
-first-class type, only attribute maps; this boundary is deliberate (see
-`docs/plan/grpolicy-plan.md`). Policy storage — grpolicy never persists
+first-class type, only attribute maps; this boundary is deliberate. Policy
+storage — grpolicy never persists
 the expression string anywhere; where it comes from is entirely the
-caller's problem. Nested/hierarchical attribute paths
-(`user.address.city`) — a v0.2+ candidate. A policy authoring UI or CLI
+caller's problem. Method-call syntax (`resource.Method()`), slicing
+(`items[1:2]`), and indexing into a plain Go `string` — nested
+map/slice/array/struct attribute access, including optional chaining
+(`?.`), is supported; see [Expression language](#expression-language).
+A policy authoring UI or CLI
 validator tool.
 
 ## Contributing

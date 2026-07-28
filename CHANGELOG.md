@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-28
+
+Nested attribute access (`*ast.MemberNode`/`*ast.ChainNode` support),
+implemented stage-by-stage; see `docs/architecture.md` §12 for the full
+design record, including two
+things discovered empirically rather than assumed: a latent
+complexity-undercounting gap in `WithMaxComplexity` that this closes as a
+side effect, and a genuine asymmetry in how `expr-lang/expr`'s own
+parser/VM handles optional chaining depending on dot-vs-bracket syntax.
+
+### Added
+
+- Nested attribute access — `resource.ownerID` / `resource["ownerID"]` /
+  `items[0]`, multi-level chains (`a.b.c`) — against `map[string]any`,
+  general `map[K]V]` values, slices/arrays, and Go structs (or
+  pointer-to-struct, dereferenced automatically through any number of
+  pointer levels, exported fields only via reflection, including
+  embedded/promoted fields). A missing map key, out-of-range index, nil
+  intermediate value, or unexported/unknown struct field is always
+  `ErrAttributeMissing`; a wrong-shaped property (e.g. a string key against
+  a slice, or indexing into a plain Go `string`) is always `ErrTypeMismatch`
+  — the same fail-loud rules as any other attribute access, no new sentinel
+  errors added.
+- Optional chaining (`a?.b`, `a?.[0]`, multi-link chains like `a.b?.c?.d`)
+  — guards against a nil value only, never against a missing key/index/field
+  (still `ErrAttributeMissing` regardless of `?.` anywhere in the
+  expression); tunnels a nil through the rest of a dot-continued chain
+  without evaluating anything further. Matches `expr-lang/expr`'s own real
+  parser/VM semantics exactly, including the asymmetry where a
+  bracket-index continuation right after a closed chain is *not* protected
+  unless that bracket step is itself optional — verified against the real
+  library, not assumed.
+
+### Fixed
+
+- `measureComplexity`/`WithMaxComplexity` now actually count nested
+  member-access depth — previously latent (and harmless, since `Evaluate`
+  unconditionally rejected every `MemberNode`): a dotted chain of any depth
+  counted as exactly one opaque leaf node.
+
 ## [0.2.0] - 2026-07-23
 
 Ecosystem-wide Stage 2 pass: test structure, a couple of real bug fixes,
