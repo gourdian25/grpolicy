@@ -293,8 +293,61 @@ when `len(c.chains) > 0`, i.e. only for links reachable inside a `ChainNode`
 `evalMember`/`evalChain` must replicate this exact asymmetry to stay
 faithful to what the syntax actually means.
 
-At this stage, `eval()` still has no case for `*ast.MemberNode`/
-`*ast.ChainNode` — both still hit the existing "unsupported expression node"
-default. Evaluation support, the sentinel-error bucketing decision, and the
-optional-chaining short-circuit semantics are recorded in this section as
-later stages land.
+**Evaluation support (Stage 2): maps, slices, and arrays.** `eval()` gained a
+`*ast.MemberNode` case dispatching to `evalMember`, which mirrors
+`evalComparison`'s exact shape: evaluate the base (`w.eval(node.Node)`,
+recursing through `eval()`'s own dispatch — no special-casing needed even
+when `node.Node` is itself a `MemberNode`, since the switch already routes
+back into `evalMember`), propagate its error; if the base is nil, fail loud
+(`ErrAttributeMissing` — there is no `?.` yet, so this is unconditional at
+this stage; Stage 4 replaces it with the full optional-chaining rule);
+otherwise evaluate the property (`w.eval(node.Property)` — for dot access
+this is always a trivially-successful `*ast.StringNode` leaf eval, for
+bracket access it may be any expression, including one that itself fails),
+propagate its error; then resolve the property against the base in
+`resolveMember`. `Children` is uniformly `[baseCheck, propCheck]` for both
+dot and bracket forms, confirmed exactly as anticipated during planning —
+no special-casing needed since a dot-form property is just an ordinary leaf
+node from `eval()`'s own perspective.
+
+**Sentinel bucketing (confirmed, no new sentinels added):**
+
+- `ErrAttributeMissing` — the referenced thing does not exist: a missing
+  `map[string]any`/general-map key, an out-of-range slice/array index
+  (including negative), or a nil base (map/slice/pointer/interface) reached
+  with no `?.` anywhere yet to allow it.
+- `ErrTypeMismatch` — the shape is structurally wrong for the operator: a
+  non-string property against a `map[string]any`, a non-numeric-kind
+  property against a general map's key type (with numeric cross-kind keys
+  converted the same way `functions.go`'s `isNumericKind`+`Convert` pattern
+  already does for custom-function arguments), a non-integer-kind property
+  against a slice/array (a `float64` index is a type mismatch, never
+  truncated), or indexing into any other base kind — this is also where a
+  plain Go `string` base is rejected (`name[0]`), via the same generic
+  "unsupported base kind" branch as anything else, not a bespoke check.
+
+`resolveMember` (`eval.go`) implements this: a `map[string]any` fast path
+(mirroring `membershipCheck`'s own fast-path style) falls back to a generic
+`reflect`-based path for any other map, slice, or array — `resolveMapMember`
+and `resolveIndexMember` respectively. `isNilBase` handles the
+nil-interface-vs-typed-nil-pointer/map/slice trap uniformly (a nil
+`map[string]any` stored in an `any` is not `== nil` as a bare interface
+comparison despite being logically nil) — checked once, before any
+kind-specific resolution, so every base kind gets the same nil handling.
+`toInt` mirrors `toFloat`'s exhaustive-switch style for integer kinds only;
+`uint`/`uint64` are the only kinds that can genuinely exceed `int`'s range on
+the 64-bit platforms grpolicy targets (int8/16/32/64 and uint8/16/32 always
+fit, by Go's own guarantee that `int` is at least 32 bits and a same-or-wider
+signed/unsigned-of-lesser-width value can never overflow it) — an oversized
+`uint`/`uint64` index is `ErrTypeMismatch`, never silently wrapped to a
+bogus/negative index. Proven by `testMemberAccessCollections`
+(`contract_engine_test.go`), including an `IndexKindCoercionMatrix` subtest
+covering every integer kind (mirroring `testTypeCoercionMatrix`'s own
+numeric-kind coverage style) and an `IndexOverflowGuardFailsLoud` subtest for
+the `uint`/`uint64` boundary.
+
+At this stage, `eval()` still has no case for `*ast.ChainNode` — it still
+hits the existing "unsupported expression node" default (`?.` syntax is
+therefore rejected at Evaluate, even though a bare `MemberNode` without any
+`?.` in it now works). Struct field access and the optional-chaining
+short-circuit semantics are recorded in this section as later stages land.

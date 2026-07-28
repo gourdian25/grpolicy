@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - Unreleased
+
+Nested attribute access (`*ast.MemberNode`/`*ast.ChainNode` support),
+implemented stage-by-stage per `docs/plan/member-access-support-plan.md`;
+see `docs/architecture.md` §12 for the full design record. This section
+accumulates entries as each stage lands.
+
+### Added
+
+- Nested attribute access against `map[string]any`, general `map[K]V]`
+  values, and slices/arrays — both dot (`resource.ownerID`) and bracket
+  (`resource["ownerID"]`, `items[0]`) syntax, multi-level chains
+  (`a.b.c`), fail-loud on a missing key/out-of-range index/nil intermediate
+  value (`ErrAttributeMissing`) or a wrong-shaped property
+  (`ErrTypeMismatch`) — no new sentinel errors added. Struct field access
+  and optional chaining (`?.`) are not yet implemented.
+
 ## [0.2.0] - 2026-07-23
 
 Ecosystem-wide Stage 2 pass: test structure, a couple of real bug fixes,

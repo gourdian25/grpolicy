@@ -151,9 +151,19 @@ allowed and a short-circuited denied decision.
   `map[string]any`'s keys
 - **Built-ins**: `now()`, `duration("1h")`, plus `before`/`after`/
   `addDuration` for `time.Time` values
-
-Attributes are a flat `map[string]any` — nested paths like
-`user.address.city` are a v0.2+ candidate, not currently supported.
+- **Nested attribute access**: dot (`resource.ownerID`) and bracket
+  (`resource["ownerID"]`, `items[0]`) syntax are equivalent — both compile to
+  the same underlying node and produce the same `Decision.Trace` shape.
+  Supported against `map[string]any`, general `map[K]V` values (key
+  converted numerically where applicable), and slices/arrays (any integer
+  index type, no float truncation). Multi-level chains (`a.b.c`) work the
+  same way. A missing map key, an out-of-range slice/array index, or a nil
+  intermediate value is `ErrAttributeMissing`; a property of the wrong shape
+  for its base (e.g. a string key against a slice, or indexing into a plain
+  Go `string`) is `ErrTypeMismatch` — the same fail-loud rules as any other
+  attribute access, never silently coerced. Struct field access (via
+  reflection) and optional chaining (`?.`) are planned but not yet
+  implemented — see `docs/plan/member-access-support-plan.md`.
 
 ## Custom functions
 
@@ -282,8 +292,10 @@ Any RBAC/ABAC data modeling — grpolicy has no "role" or "permission" as a
 first-class type, only attribute maps; this boundary is deliberate (see
 `docs/plan/grpolicy-plan.md`). Policy storage — grpolicy never persists
 the expression string anywhere; where it comes from is entirely the
-caller's problem. Nested/hierarchical attribute paths
-(`user.address.city`) — a v0.2+ candidate. A policy authoring UI or CLI
+caller's problem. Struct field access (via reflection) and optional
+chaining (`?.`) — planned, see `docs/plan/member-access-support-plan.md`
+(nested map/slice/array attribute access itself is supported; see
+[Expression language](#expression-language)). A policy authoring UI or CLI
 validator tool.
 
 ## Contributing

@@ -18,6 +18,11 @@
 //   - Boolean logic (&&, ||, !/not), comparisons (==, !=, <, <=, >, >=),
 //     string operators (contains, startsWith, endsWith, regex matches), and
 //     membership (in) against slices, arrays, and map keys
+//   - Nested attribute access — resource.ownerID or resource["ownerID"],
+//     items[0], multi-level chains like a.b.c — against map, slice, and
+//     array attribute values, fail-loud on a missing key/out-of-range index
+//     exactly like a top-level attribute (struct field access and optional
+//     chaining are not yet supported; see docs/architecture.md §12)
 //   - now() and duration() built-ins, plus custom function registration via
 //     RegisterFunction for anything else (e.g. a future
 //     isBusinessHours())
@@ -107,9 +112,11 @@
 // the boundary is wrong, not a reason to add it. grpolicy never persists
 // policy text anywhere — where the expression string comes from (a config
 // file, a database row, a hardcoded string) is entirely the caller's
-// problem. Attribute paths are flat (map[string]any); nested access like
-// user.address.city is not currently supported (a v0.2+ candidate). There
-// is no policy authoring UI or CLI validator tool.
+// problem. Nested map/slice/array attribute access is supported (see Key
+// Features above); struct field access via reflection and optional chaining
+// (?.) are planned but not yet implemented — see
+// docs/plan/member-access-support-plan.md. There is no policy authoring UI
+// or CLI validator tool.
 //
 // License: MIT
 // Repository: https://github.com/gourdian25/grpolicy

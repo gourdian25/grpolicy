@@ -70,7 +70,7 @@ form needs the same `matchClosingFrom`-style fix as `CallNode`/`ArrayNode`.
 | Stage | Goal | Status |
 |---|---|---|
 | 1 | `children()`/`nodeSpan` foundation for `MemberNode`/`ChainNode` — fixes latent complexity-undercounting gap; `Evaluate` behavior unchanged | Done |
-| 2 | `evalMember` over `map[string]any`, general maps, slices/arrays — dot **and** bracket syntax, no structs, no `?.` yet | Not started |
+| 2 | `evalMember` over `map[string]any`, general maps, slices/arrays — dot **and** bracket syntax, no structs, no `?.` yet | Done |
 | 3 | `evalMember` extended to Go structs via `reflect` (pointer deref, exported-field lookup, panic-recovery backstop) | Not started |
 | 4 | `*ast.ChainNode` + `MemberNode.Optional` — asymmetric short-circuit semantics, transparent `ChainNode` trace | Not started |
 | 5 | Finalize: version bump, CHANGELOG, README/docs.go/architecture.md closing pass, full regression + longer fuzz run | Not started |

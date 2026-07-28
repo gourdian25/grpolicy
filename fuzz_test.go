@@ -64,6 +64,13 @@ func FuzzCompileEvaluate(f *testing.F) {
 		`unregisteredFn()`,
 		`now`,
 		`duration`,
+		`nested.x == age`,
+		`nested["y"] == name`,
+		`nested.missing`,
+		`roles[0] == "admin"`,
+		`roles[100]`,
+		`age[0]`,
+		`name[0]`,
 	}
 	for _, s := range seeds {
 		f.Add(s, 5, "hello", true)
@@ -89,6 +96,7 @@ func FuzzCompileEvaluate(f *testing.F) {
 			"role":    s,
 			"score":   float64(i),
 			"roles":   []string{s, "admin"},
+			"nested":  map[string]any{"x": i, "y": s},
 		}
 
 		type compileResult struct {

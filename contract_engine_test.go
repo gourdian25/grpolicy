@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,6 +51,7 @@ func runEngineContract(t *testing.T, newEngine func() (grpolicy.Engine, error)) 
 	t.Run("EngineOptionsAndLogger", func(t *testing.T) { testEngineOptionsAndLogger(t) })
 	t.Run("FunctionCallDispatchEdgeCases", func(t *testing.T) { testFunctionCallDispatchEdgeCases(t, newEngine) })
 	t.Run("ExpressionTextIncludesClosingDelimiters", func(t *testing.T) { testExpressionTextIncludesClosingDelimiters(t, newEngine) })
+	t.Run("MemberAccessCollections", func(t *testing.T) { testMemberAccessCollections(t, newEngine) })
 }
 
 func testBooleanOperators(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
@@ -1245,6 +1247,7 @@ func testExpressionTextIncludesClosingDelimiters(t *testing.T, newEngine func() 
 		{"OneArgCall", "double(x) == 10", map[string]any{"x": 5}, "double(x)"},
 		{"NestedCall", "double(double(x)) == 20", map[string]any{"x": 5}, "double(double(x))"},
 		{"ArrayLiteral", "x in [1, 2, 3]", map[string]any{"x": 2}, "x"}, // left child is "x"; right child checked separately below
+		{"MemberBracketAccess", `resource["ownerID"] == "u1"`, map[string]any{"resource": map[string]any{"ownerID": "u1"}}, `resource["ownerID"]`},
 	}
 
 	for _, c := range cases {
@@ -1279,6 +1282,308 @@ func testExpressionTextIncludesClosingDelimiters(t *testing.T, newEngine func() 
 		right := decision.Trace[0].Children[1]
 		if right.Expression != "[1, 2, 3]" {
 			t.Fatalf("array literal Expression = %q, want %q (closing bracket must not be dropped)", right.Expression, "[1, 2, 3]")
+		}
+	})
+
+	t.Run("MemberBracketClosingBracket", func(t *testing.T) {
+		policy, err := engine.Compile(`resource["ownerID"] == "u1"`)
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		decision, err := policy.Evaluate(ctx, map[string]any{"resource": map[string]any{"ownerID": "u1"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		left := decision.Trace[0].Children[0]
+		if left.Expression != `resource["ownerID"]` {
+			t.Fatalf(`member bracket-access Expression = %q, want %q (closing bracket must not be dropped)`, left.Expression, `resource["ownerID"]`)
+		}
+	})
+}
+
+// testMemberAccessCollections covers Stage 2 of the member-access feature
+// (docs/plan/member-access-support-plan.md, docs/architecture.md §12): dot
+// and bracket access against map[string]any, general maps (via reflect),
+// and slices/arrays. No struct support yet (Stage 3) and no "?." yet
+// (Stage 4) — a nil base always fails loud here.
+func testMemberAccessCollections(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
+	t.Helper()
+	ctx := context.Background()
+
+	newPolicy := func(t *testing.T, expr string) grpolicy.CompiledPolicy {
+		t.Helper()
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		t.Cleanup(func() { _ = engine.Close() })
+		policy, err := engine.Compile(expr)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", expr, err)
+		}
+		return policy
+	}
+
+	t.Run("DotAndBracketAccessProduceSameResult", func(t *testing.T) {
+		attrs := map[string]any{"resource": map[string]any{"ownerID": "u1"}}
+
+		dotDecision, err := newPolicy(t, `resource.ownerID == "u1"`).Evaluate(ctx, attrs)
+		if err != nil {
+			t.Fatalf("Evaluate(dot): %v", err)
+		}
+		if !dotDecision.Allowed {
+			t.Fatalf("dot access Allowed = false, want true")
+		}
+
+		bracketDecision, err := newPolicy(t, `resource["ownerID"] == "u1"`).Evaluate(ctx, attrs)
+		if err != nil {
+			t.Fatalf("Evaluate(bracket): %v", err)
+		}
+		if !bracketDecision.Allowed {
+			t.Fatalf("bracket access Allowed = false, want true")
+		}
+
+		dotMember := dotDecision.Trace[0].Children[0]
+		bracketMember := bracketDecision.Trace[0].Children[0]
+		if len(dotMember.Children) != 2 || len(bracketMember.Children) != 2 {
+			t.Fatalf("MemberNode Children = %d, %d, want 2, 2 (base + property, uniform for dot and bracket)", len(dotMember.Children), len(bracketMember.Children))
+		}
+		if dotMember.Result != "u1" || bracketMember.Result != "u1" {
+			t.Fatalf("MemberNode Result = %v, %v, want u1, u1", dotMember.Result, bracketMember.Result)
+		}
+	})
+
+	t.Run("MissingMapKeyFailsLoud", func(t *testing.T) {
+		decision, err := newPolicy(t, "resource.missingField").Evaluate(ctx, map[string]any{"resource": map[string]any{"ownerID": "u1"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true on error, want false")
+		}
+		if len(decision.Trace) != 1 {
+			t.Fatalf("Trace has %d root nodes, want 1 (partial trace must still be populated)", len(decision.Trace))
+		}
+	})
+
+	t.Run("NonStringKeyAgainstMapIsTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, "resource[0]").Evaluate(ctx, map[string]any{"resource": map[string]any{"ownerID": "u1"}})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("SliceIndexAccess", func(t *testing.T) {
+		decision, err := newPolicy(t, `items[1] == "b"`).Evaluate(ctx, map[string]any{"items": []string{"a", "b", "c"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("ArrayIndexAccess", func(t *testing.T) {
+		decision, err := newPolicy(t, "items[2] == 3").Evaluate(ctx, map[string]any{"items": [3]int{1, 2, 3}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("OutOfRangeIndexFailsLoud", func(t *testing.T) {
+		_, err := newPolicy(t, "items[10]").Evaluate(ctx, map[string]any{"items": []string{"a", "b"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NegativeIndexFailsLoud", func(t *testing.T) {
+		// Written as items[i] with i = -1 rather than the literal
+		// "items[-1]": expr-lang/expr parses a leading "-" as *ast.UnaryNode,
+		// which grpolicy's evalUnary doesn't support (only "!"/"not") — that
+		// would fail for an unrelated reason before ever reaching
+		// resolveMember, so a negative *value* has to arrive via an
+		// attribute instead.
+		_, err := newPolicy(t, "items[i]").Evaluate(ctx, map[string]any{"items": []string{"a", "b"}, "i": -1})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NonIntegerIndexAgainstSliceIsTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, `items["x"]`).Evaluate(ctx, map[string]any{"items": []string{"a", "b"}})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("NilMapBaseFailsLoud", func(t *testing.T) {
+		var nilMap map[string]any
+		_, err := newPolicy(t, "resource.ownerID").Evaluate(ctx, map[string]any{"resource": nilMap})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NilSliceBaseFailsLoud", func(t *testing.T) {
+		var nilSlice []string
+		_, err := newPolicy(t, "items[0]").Evaluate(ctx, map[string]any{"items": nilSlice})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("StringBaseIndexingUnsupported", func(t *testing.T) {
+		_, err := newPolicy(t, "name[0]").Evaluate(ctx, map[string]any{"name": "hello"})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("NestedMemberChainThreeLevelsDeep", func(t *testing.T) {
+		decision, err := newPolicy(t, "a.b.c == 5").Evaluate(ctx, map[string]any{
+			"a": map[string]any{"b": map[string]any{"c": 5}},
+		})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("GenericMapNonStringKeyType", func(t *testing.T) {
+		decision, err := newPolicy(t, `scores[1] == "b"`).Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b", 2: "c"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("GenericMapMissingKeyFailsLoud", func(t *testing.T) {
+		_, err := newPolicy(t, "scores[99]").Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("GenericMapKeyTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, `scores["x"]`).Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b"}})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("GenericMapConvertibleNumericKey", func(t *testing.T) {
+		// propVal ("1") arrives as a plain Go int (IntegerNode's literal
+		// type) but the map's key type is int64 — not directly assignable,
+		// but numerically convertible, exercising resolveMapMember's
+		// Convert path (distinct from GenericMapNonStringKeyType above,
+		// where the key type is already a plain int and needs no convert).
+		decision, err := newPolicy(t, `scores[1] == "y"`).Evaluate(ctx, map[string]any{"scores": map[int64]string{1: "y"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("GenericMapNilKeyIsTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, "scores[k]").Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b"}, "k": nil})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("MissingBaseIdentifierFailsLoud", func(t *testing.T) {
+		// "resource" itself isn't in attrs at all — the error must
+		// propagate up from evalIdentifier through evalMember unchanged,
+		// distinct from every other test above where "resource"/"items" is
+		// present but nil, missing a key, or out of range.
+		_, err := newPolicy(t, "resource.ownerID").Evaluate(ctx, map[string]any{})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("MissingPropertyIdentifierFailsLoud", func(t *testing.T) {
+		// Bracket-form property is itself an expression (an identifier
+		// here) that can fail independently of the base.
+		_, err := newPolicy(t, "items[i]").Evaluate(ctx, map[string]any{"items": []string{"a", "b"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("UntypedNilBaseFailsLoud", func(t *testing.T) {
+		// A literal untyped nil stored in attrs, distinct from
+		// NilMapBaseFailsLoud/NilSliceBaseFailsLoud above (a typed nil
+		// map/slice, which is never == nil as a bare interface comparison).
+		_, err := newPolicy(t, "resource.ownerID").Evaluate(ctx, map[string]any{"resource": nil})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("IndexKindCoercionMatrix", func(t *testing.T) {
+		// Every integer kind an attribute value might actually carry (no
+		// float truncation — that's NonIntegerIndexAgainstSliceIsTypeMismatch
+		// above), mirroring testTypeCoercionMatrix's own numeric-kind
+		// coverage style for compareValues/toFloat.
+		cases := []struct {
+			name string
+			idx  any
+		}{
+			{"Int8", int8(1)},
+			{"Int16", int16(1)},
+			{"Int32", int32(1)},
+			{"Int64", int64(1)},
+			{"Uint", uint(1)},
+			{"Uint8", uint8(1)},
+			{"Uint16", uint16(1)},
+			{"Uint32", uint32(1)},
+			{"Uint64", uint64(1)},
+		}
+		policy := newPolicy(t, `items[i] == "b"`)
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				decision, err := policy.Evaluate(ctx, map[string]any{"items": []string{"a", "b", "c"}, "i": c.idx})
+				if err != nil {
+					t.Fatalf("Evaluate: %v", err)
+				}
+				if !decision.Allowed {
+					t.Fatalf("Allowed = false, want true for index type %T", c.idx)
+				}
+			})
+		}
+	})
+
+	t.Run("IndexOverflowGuardFailsLoud", func(t *testing.T) {
+		// uint/uint64 are the only kinds toInt guards against overflowing
+		// int on the 64-bit platforms grpolicy targets (see toInt's doc
+		// comment) — a value this large must be a type mismatch, never
+		// silently wrapped to a negative/bogus index.
+		cases := []struct {
+			name string
+			idx  any
+		}{
+			{"UintTooLarge", uint(math.MaxUint64)},
+			{"Uint64TooLarge", uint64(math.MaxUint64)},
+		}
+		policy := newPolicy(t, "items[i]")
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				_, err := policy.Evaluate(ctx, map[string]any{"items": []string{"a", "b"}, "i": c.idx})
+				if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+					t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+				}
+			})
 		}
 	})
 }
