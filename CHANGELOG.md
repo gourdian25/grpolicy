@@ -19,8 +19,20 @@ accumulates entries as each stage lands.
   (`resource["ownerID"]`, `items[0]`) syntax, multi-level chains
   (`a.b.c`), fail-loud on a missing key/out-of-range index/nil intermediate
   value (`ErrAttributeMissing`) or a wrong-shaped property
-  (`ErrTypeMismatch`) — no new sentinel errors added. Struct field access
-  and optional chaining (`?.`) are not yet implemented.
+  (`ErrTypeMismatch`) — no new sentinel errors added.
+- Struct field access (or pointer-to-struct, dereferenced automatically
+  through any number of pointer levels) via reflection — exported fields
+  only, including embedded/promoted fields; an unexported or unknown field
+  name is `ErrAttributeMissing`, indistinguishable from the caller's
+  perspective.
+- Optional chaining (`a?.b`, `a?.[0]`, multi-link chains) — guards against a
+  nil value only, never against a missing key/index/field (still
+  `ErrAttributeMissing` regardless of `?.`); tunnels a nil through the rest
+  of a dot-continued chain without evaluating anything further. Matches
+  `expr-lang/expr`'s own real parser/VM semantics exactly, including the
+  asymmetry where a bracket-index continuation right after a closed chain
+  is *not* protected unless that bracket step is itself optional — verified
+  against the real library, not assumed.
 
 ## [0.2.0] - 2026-07-23
 

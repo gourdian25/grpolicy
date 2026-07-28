@@ -63,6 +63,18 @@ before relying on it for anything security-relevant:
   needs to be bounded, it must accept and honor its own `context.Context`
   (or an internal timeout) — grpolicy's `ctx` alone does not backstop a
   function that ignores cancellation internally.
+- **Reflection-based struct field access is read-only and export-scoped.**
+  Nested attribute access (`resource.OwnerID`, `docs/architecture.md` §12)
+  against a Go struct value can read any *exported* field reachable from it —
+  including through embedded/promoted fields — and nothing else: it never
+  invokes a method, never writes a field, and an unexported field is
+  reported exactly like a nonexistent one (`ErrAttributeMissing`), never
+  exposed even by probing for the difference. Any unexpected panic from the
+  underlying `reflect` operations (guarded against wherever possible; a
+  backstop for what those guards miss) is recovered into an error, the same
+  posture as a panic inside a registered custom function — it is a bug in
+  the caller's data shape or in grpolicy itself, never a way to crash the
+  process.
 - **No policy storage, no policy provenance.** grpolicy never persists,
   signs, or authenticates the expression string it's given — where it came
   from (a trusted config file vs. an untrusted multi-tenant input) is

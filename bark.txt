@@ -13,7 +13,8 @@
 ├── docs/
 │   ├── architecture.md
 │   └── plan/
-│       └── grpolicy-plan.md
+│       ├── grpolicy-plan.md
+│       └── member-access-support-plan.md
 ├── docs.go
 ├── engine.go
 ├── errors.go
@@ -26,6 +27,8 @@
 ├── go.sum
 ├── internal_coverage_test.go
 ├── logger.go
-└── policy.go
+├── logger_test.go
+├── policy.go
+└── version.go
 
-3 directories, 25 files
+3 directories, 28 files

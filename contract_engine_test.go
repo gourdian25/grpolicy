@@ -52,6 +52,8 @@ func runEngineContract(t *testing.T, newEngine func() (grpolicy.Engine, error)) 
 	t.Run("FunctionCallDispatchEdgeCases", func(t *testing.T) { testFunctionCallDispatchEdgeCases(t, newEngine) })
 	t.Run("ExpressionTextIncludesClosingDelimiters", func(t *testing.T) { testExpressionTextIncludesClosingDelimiters(t, newEngine) })
 	t.Run("MemberAccessCollections", func(t *testing.T) { testMemberAccessCollections(t, newEngine) })
+	t.Run("MemberAccessStructFields", func(t *testing.T) { testMemberAccessStructFields(t, newEngine) })
+	t.Run("OptionalChainShortCircuit", func(t *testing.T) { testOptionalChainShortCircuit(t, newEngine) })
 }
 
 func testBooleanOperators(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
@@ -1584,6 +1586,348 @@ func testMemberAccessCollections(t *testing.T, newEngine func() (grpolicy.Engine
 					t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
 				}
 			})
+		}
+	})
+}
+
+// memberAccessInner/memberAccessResource support testMemberAccessStructFields
+// (Stage 3 of the member-access feature): an embedded type to prove
+// FieldByName resolves promoted fields, an exported field, and an
+// unexported field to prove it's never exposed even by probing.
+type memberAccessInner struct {
+	City string
+}
+
+type memberAccessResource struct {
+	memberAccessInner
+	OwnerID string
+	secret  string // deliberately unexported — accessed only via reflect in the test itself
+}
+
+// testMemberAccessStructFields covers Stage 3 of the member-access feature
+// (docs/plan/member-access-support-plan.md, docs/architecture.md §12):
+// struct field access via reflect, exported fields only, both dot and
+// bracket syntax, pointer-to-struct auto-dereferenced, embedded/promoted
+// fields, and the resolveMember panic-recovery backstop.
+func testMemberAccessStructFields(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
+	t.Helper()
+	ctx := context.Background()
+
+	newPolicy := func(t *testing.T, expr string) grpolicy.CompiledPolicy {
+		t.Helper()
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		t.Cleanup(func() { _ = engine.Close() })
+		policy, err := engine.Compile(expr)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", expr, err)
+		}
+		return policy
+	}
+
+	t.Run("ExportedFieldDotAndBracketAccess", func(t *testing.T) {
+		resource := memberAccessResource{OwnerID: "u1"}
+
+		dotDecision, err := newPolicy(t, `resource.OwnerID == "u1"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate(dot): %v", err)
+		}
+		if !dotDecision.Allowed {
+			t.Fatalf("dot field access Allowed = false, want true")
+		}
+
+		bracketDecision, err := newPolicy(t, `resource["OwnerID"] == "u1"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate(bracket): %v", err)
+		}
+		if !bracketDecision.Allowed {
+			t.Fatalf("bracket field access Allowed = false, want true")
+		}
+	})
+
+	t.Run("UnexportedFieldFailsLoudNotPanics", func(t *testing.T) {
+		// Reaching this assertion at all (rather than crashing the test
+		// binary) is itself part of the proof, same framing as this repo's
+		// existing CustomFunctionPanicIsRecoveredNotCrashed.
+		resource := memberAccessResource{OwnerID: "u1", secret: "s"}
+		_, err := newPolicy(t, "resource.secret").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("UnknownFieldNameFailsLoud", func(t *testing.T) {
+		resource := memberAccessResource{OwnerID: "u1"}
+		_, err := newPolicy(t, "resource.NoSuchField").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("PointerToStructDereferencedAutomatically", func(t *testing.T) {
+		resource := &memberAccessResource{OwnerID: "u1"}
+		decision, err := newPolicy(t, `resource.OwnerID == "u1"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("NilPointerBaseFailsLoudNotPanics", func(t *testing.T) {
+		var resource *memberAccessResource
+		_, err := newPolicy(t, "resource.OwnerID").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NilInnerPointerAfterOuterDereferenceFailsLoud", func(t *testing.T) {
+		// A non-nil **memberAccessResource pointing to a nil
+		// *memberAccessResource: isNilBase (checked before resolveMember is
+		// ever called) only sees the outer pointer, which isn't nil — the
+		// nil is only discovered one level in, exercising resolveMember's
+		// own pointer-deref loop's nil check, distinct from
+		// NilPointerBaseFailsLoudNotPanics above (a nil pointer at the
+		// outermost level, caught by isNilBase itself).
+		var inner *memberAccessResource
+		outer := &inner
+		_, err := newPolicy(t, "resource.OwnerID").Evaluate(ctx, map[string]any{"resource": outer})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("EmbeddedPromotedFieldReachable", func(t *testing.T) {
+		resource := memberAccessResource{memberAccessInner: memberAccessInner{City: "NYC"}}
+		decision, err := newPolicy(t, `resource.City == "NYC"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("NonStringPropertyAgainstStructIsTypeMismatch", func(t *testing.T) {
+		resource := memberAccessResource{OwnerID: "u1"}
+		_, err := newPolicy(t, "resource[0]").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("UnhashableGenericMapKeyPanicRecovered", func(t *testing.T) {
+		// A real, reachable-via-public-API panic source: reflect.Value.
+		// MapIndex panics ("hash of unhashable type") when the map's key
+		// type is an interface (any concrete type is AssignableTo it, so
+		// resolveMapMember's own pre-checks never reject it) and the actual
+		// key value's dynamic type isn't hashable (a slice here) — confirmed
+		// empirically, not assumed, before writing this test. This proves
+		// resolveMember's recover backstop (added alongside struct support
+		// in this stage) actually recovers, rather than crashing the
+		// process — reaching the assertion at all is part of the proof.
+		_, err := newPolicy(t, "m[k]").Evaluate(ctx, map[string]any{
+			"m": map[any]string{"x": "y"},
+			"k": []int{1, 2, 3},
+		})
+		if err == nil {
+			t.Fatal("Evaluate error = nil, want a non-nil error (panic must be recovered, not crash the process)")
+		}
+	})
+}
+
+// testOptionalChainShortCircuit covers Stage 4 of the member-access feature
+// (docs/plan/member-access-support-plan.md, docs/architecture.md §12):
+// *ast.ChainNode / MemberNode.Optional short-circuit semantics, mirroring
+// testShortCircuitAndTrace's own falsifying-test discipline (a call
+// counter, not just a returned value, proves Property is genuinely never
+// evaluated on the short-circuit path).
+//
+// The asymmetric rule this proves (verified empirically against real
+// expr-lang/expr — see docs/architecture.md §12, Decision B): once the
+// first "?." is hit walking outward from the base, every subsequent DOT
+// link tunnels a nil through to the end, regardless of that link's own
+// Optional flag; a link written *before* the first "?." is never
+// protected; and — the non-obvious part — a BRACKET-index link
+// immediately following a closed chain (i.e. "a?.b[0]") is *not*
+// protected either, because expr-lang/expr's own parser doesn't fold a
+// bracket continuation into the same ChainNode the way it does a dot
+// continuation (confirmed against real expr-lang/expr's own VM, which
+// raises its own runtime error for exactly this shape, not a graceful
+// nil) — only a bracket step that is *itself* optional ("?.[") is
+// protected.
+func testOptionalChainShortCircuit(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
+	t.Helper()
+	ctx := context.Background()
+
+	newPolicy := func(t *testing.T, engine grpolicy.Engine, expr string) grpolicy.CompiledPolicy {
+		t.Helper()
+		policy, err := engine.Compile(expr)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", expr, err)
+		}
+		return policy
+	}
+
+	t.Run("NilBaseShortCircuitsSingleLink", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		decision, err := newPolicy(t, engine, "a?.b").Evaluate(ctx, map[string]any{"a": nil})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false (a tunneled nil is never truthy)")
+		}
+		if len(decision.Trace) != 1 {
+			t.Fatalf("Trace has %d root nodes, want 1", len(decision.Trace))
+		}
+		root := decision.Trace[0]
+		if !root.Evaluated {
+			t.Fatalf("root.Evaluated = false, want true (a tunneled-to-nil link has a definite, legitimate value: nil)")
+		}
+		if root.Result != nil {
+			t.Fatalf("root.Result = %#v, want nil", root.Result)
+		}
+		if len(root.Children) != 2 || root.Children[1].Evaluated {
+			t.Fatalf("root.Children[1] (Property) Evaluated = %v, want false — Property must never be evaluated on the short-circuit path", root.Children[1].Evaluated)
+		}
+	})
+
+	t.Run("NilIntermediateShortCircuitsRemainingLinksWithoutSideEffects", func(t *testing.T) {
+		// a?.b?.[expensiveIndex()]: the bracket step is itself optional
+		// ("?.["), so — unlike the unprotected a?.b[expensiveIndex()]
+		// shape covered by BracketContinuationAfterOptionalChainIsNotProtected
+		// below — this one *does* tunnel, and expensiveIndex() must never
+		// be called (confirmed empirically against real expr-lang/expr
+		// before writing this test: it returns nil with the call count at
+		// zero for exactly this shape).
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		var calls int32
+		if err := engine.RegisterFunction("expensiveIndex", func() int {
+			atomic.AddInt32(&calls, 1)
+			return 0
+		}); err != nil {
+			t.Fatalf("RegisterFunction: %v", err)
+		}
+
+		decision, err := newPolicy(t, engine, "a?.b?.[expensiveIndex()]").Evaluate(ctx, map[string]any{"a": nil})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if got := atomic.LoadInt32(&calls); got != 0 {
+			t.Fatalf("expensiveIndex() was called %d times, want 0 — nil tunnel did not actually prevent Property evaluation", got)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false")
+		}
+	})
+
+	t.Run("LinkBeforeFirstOptionalIsNotProtected", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "a.b?.c").Evaluate(ctx, map[string]any{"a": nil})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing (a.b is written before the first '?.', never protected)", err)
+		}
+	})
+
+	t.Run("PlainDotAfterFirstOptionalStillTunnels", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		decision, err := newPolicy(t, engine, "a?.b.c.d").Evaluate(ctx, map[string]any{"a": nil})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false")
+		}
+	})
+
+	t.Run("BracketContinuationAfterOptionalChainIsNotProtected", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "a?.b[0]").Evaluate(ctx, map[string]any{"a": nil})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing (a bracket-index continuation right after a closed chain is not protected — see docs/architecture.md §12)", err)
+		}
+	})
+
+	t.Run("MissingKeyUnderOptionalStillFailsLoud", func(t *testing.T) {
+		// Decision A: "?." guards against nil, never against absence.
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "resource?.missingKey").Evaluate(ctx, map[string]any{"resource": map[string]any{"present": true}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("MissingBaseIdentifierStillFailsLoudEvenUnderOptional", func(t *testing.T) {
+		// "a" isn't in attrs at all — absence of the base identifier itself
+		// is a hard error regardless of "?." anywhere in the expression,
+		// distinct from NilBaseShortCircuitsSingleLink above (where "a" is
+		// present but its value is nil).
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "a?.b").Evaluate(ctx, map[string]any{})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("LegitimatelyNilValueTunnelsSameAsShortCircuit", func(t *testing.T) {
+		// "owner" genuinely exists as a key and genuinely stores nil (not a
+		// missing key, not a "resource" that's itself nil) — tunnels
+		// identically to any other nil, indistinguishable by design (see
+		// docs/architecture.md §12).
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		decision, err := newPolicy(t, engine, "resource.owner?.name").Evaluate(ctx, map[string]any{
+			"resource": map[string]any{"owner": nil},
+		})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false")
 		}
 	})
 }

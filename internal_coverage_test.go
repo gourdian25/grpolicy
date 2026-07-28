@@ -3,6 +3,7 @@
 package grpolicy
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -83,6 +84,26 @@ func TestChildren_MemberNodeAndChainNode(t *testing.T) {
 	gotChain := children(chain)
 	if len(gotChain) != 1 || gotChain[0] != ast.Node(member) {
 		t.Fatalf("children(ChainNode) = %v, want [member]", gotChain)
+	}
+}
+
+// TestEvalChain_NonMemberNodeDefensiveFallback exercises evalChain's
+// defensive fallback branch directly. Unreachable via Compile+Evaluate:
+// expr-lang/expr's real parser only ever wraps a *ast.MemberNode (run) in a
+// *ast.ChainNode (confirmed empirically while tracing parsePostfixExpression
+// for docs/architecture.md §12) — covered here by driving a walker directly
+// against a hand-built ChainNode wrapping something else.
+func TestEvalChain_NonMemberNodeDefensiveFallback(t *testing.T) {
+	ident := &ast.IdentifierNode{Value: "a"}
+	chain := &ast.ChainNode{Node: ident}
+
+	w := &walker{ctx: context.Background(), attrs: map[string]any{"a": 5}, fns: newFunctionRegistry(), source: "a"}
+	val, _, err := w.evalChain(chain)
+	if err != nil {
+		t.Fatalf("evalChain fallback: %v", err)
+	}
+	if val != 5 {
+		t.Fatalf("evalChain fallback value = %v, want 5 (fallback should delegate to eval(node.Node))", val)
 	}
 }
 

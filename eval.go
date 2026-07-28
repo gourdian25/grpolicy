@@ -68,6 +68,8 @@ func (w *walker) eval(n ast.Node) (any, CheckNode, error) {
 		return w.evalArray(node)
 	case *ast.MemberNode:
 		return w.evalMember(node)
+	case *ast.ChainNode:
+		return w.evalChain(node)
 	case *ast.StringNode:
 		return w.leaf(node, node.Value)
 	case *ast.IntegerNode:
@@ -234,11 +236,17 @@ func (w *walker) evalArray(node *ast.ArrayNode) (any, CheckNode, error) {
 // and bracket (resource["ownerID"], items[0]) syntax — the same AST node
 // (*ast.MemberNode) covers both, differing only in Property's runtime value.
 // See docs/architecture.md §12 for the full design (sentinel bucketing,
-// dot-vs-bracket handling, and — once Stage 4 lands — optional-chaining
-// short-circuit semantics).
+// dot-vs-bracket handling, and the optional-chaining short-circuit
+// semantics below).
 //
-// A nil base always fails loud here (ErrAttributeMissing) — there is no
-// "?." support yet at this stage; that is Stage 4's job.
+// A nil base fails loud (ErrAttributeMissing) unless node is reached under
+// an enclosing "?." (inOptionalScope), in which case it short-circuits to a
+// legitimate nil result instead — see inOptionalScope's own doc comment for
+// the exact (asymmetric) rule this replicates from expr-lang/expr's own
+// parser/VM semantics. "?." only ever guards against nil; a missing map
+// key/out-of-range index/unknown-or-unexported struct field is still always
+// ErrAttributeMissing regardless of "?." anywhere in the expression — see
+// docs/architecture.md §12, Decision A.
 func (w *walker) evalMember(node *ast.MemberNode) (any, CheckNode, error) {
 	check := CheckNode{Expression: exprText(node, w.source)}
 
@@ -250,6 +258,20 @@ func (w *walker) evalMember(node *ast.MemberNode) (any, CheckNode, error) {
 
 	if isNilBase(baseVal) {
 		check.Children = []CheckNode{baseCheck, buildStub(node.Property, w.source)}
+		if inOptionalScope(node) {
+			// Property is never evaluated on this path — no partial
+			// evaluation of the rest of the chain past a tunneled nil
+			// (proven by testOptionalChainShortCircuit's call-counter
+			// discipline, the same style as testShortCircuitAndTrace).
+			// Evaluated: true, Result: nil is "this link has a definite,
+			// legitimate value: nil" per CheckNode.Result's own doc
+			// comment — indistinguishable, by design, from a base that
+			// happened to genuinely already be nil (Decision B: there is
+			// no way, and no need, to tell "short-circuited" apart from
+			// "legitimately nil" from the trace alone).
+			check.Evaluated = true
+			return nil, check, nil
+		}
 		return nil, check, fmt.Errorf("grpolicy: member access %s: base value is nil: %w", check.Expression, ErrAttributeMissing)
 	}
 
@@ -267,12 +289,69 @@ func (w *walker) evalMember(node *ast.MemberNode) (any, CheckNode, error) {
 	return result, check, nil
 }
 
+// evalChain evaluates *ast.ChainNode, the wrapper expr-lang/expr's parser
+// uses for a run of one-or-more "?."-containing links (see
+// docs/architecture.md §12 for how this was traced through the real parser
+// source). It is fully transparent in Decision.Trace — no ChainNode row is
+// ever produced, only whatever evalMember returns for its wrapped node.
+func (w *walker) evalChain(node *ast.ChainNode) (any, CheckNode, error) {
+	if member, ok := node.Node.(*ast.MemberNode); ok {
+		return w.evalMember(member)
+	}
+	// Defensive fallback: expr-lang/expr's grammar only ever wraps a
+	// MemberNode (run) in a ChainNode — confirmed empirically while tracing
+	// parsePostfixExpression (docs/architecture.md §12) — so this branch is
+	// unreachable via any real parser output. Kept so eval never panics on
+	// a ChainNode wrapping something else, matching this repo's existing
+	// defensive-fallback style for shapes no real parser output produces.
+	return w.eval(node.Node)
+}
+
+// inOptionalScope reports whether node is reached under an enclosing "?." —
+// true if node.Optional itself, or if node.Node is itself a *ast.MemberNode
+// for which this is true. This is a purely static, structural predicate
+// (no runtime state threaded through eval's recursion needed): tracing
+// expr-lang/expr's real parser (parsePostfixExpression, docs/architecture.md
+// §12) shows that once any "?." appears in a postfix chain, the parser
+// wraps the entire accumulated chain so far — including earlier plain "."
+// links — in one ChainNode, re-wrapping at every subsequent step, and the
+// compiler (compiler/compiler.go) only ever emits a nil-guard for an
+// Optional-flagged MemberNode reached inside such a wrapping. So "has '?.'
+// been used at or before this point" is fully determined by the AST shape
+// alone: a link written before the first "?." is never protected (Decision
+// B), which is exactly what this predicate returns false for.
+func inOptionalScope(node *ast.MemberNode) bool {
+	if node.Optional {
+		return true
+	}
+	if base, ok := node.Node.(*ast.MemberNode); ok {
+		return inOptionalScope(base)
+	}
+	return false
+}
+
 // resolveMember resolves propVal against base — a map key (string or,
-// through reflect, any key type a general map[K]V accepts) or a slice/array
-// index (any integer-kind value, no float truncation). Any other base kind
-// (including a plain Go string, deliberately excluded from indexing) is
-// ErrTypeMismatch. Struct field access (via reflect) is added in Stage 3.
-func resolveMember(base, propVal any) (any, error) {
+// through reflect, any key type a general map[K]V accepts), a slice/array
+// index (any integer-kind value, no float truncation), or a struct field
+// (string name only, exported fields only — reflection never invokes
+// methods and never exposes an unexported field, see docs/architecture.md
+// §12). base is dereferenced through any number of pointer levels first
+// (each one already confirmed non-nil by evalMember's isNilBase check before
+// resolveMember is ever called for the outermost one; a nil pointer found
+// while dereferencing a deeper level, e.g. a struct field that is itself a
+// nil pointer, is the same ErrAttributeMissing as any other nil base). Any
+// other base kind (including a plain Go string, deliberately excluded from
+// indexing) is ErrTypeMismatch.
+//
+// The reflect operations below are guarded by explicit checks wherever
+// possible (CanInterface before Interface, AssignableTo/ConvertibleTo before
+// Convert, bounds checks before Index) — the recover here is a backstop for
+// whatever a gap in those checks misses, not the primary safety mechanism,
+// mirroring functionRegistry.call's identical precedent (functions.go) for
+// reflect-based custom-function invocation: a recovered panic is a plain
+// diagnostic error, not a wrapped sentinel, since reaching it means
+// grpolicy's own pre-checks had a gap.
+func resolveMember(base, propVal any) (result any, err error) {
 	if m, ok := base.(map[string]any); ok {
 		key, ok := propVal.(string)
 		if !ok {
@@ -285,12 +364,27 @@ func resolveMember(base, propVal any) (any, error) {
 		return val, nil
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			result, err = nil, fmt.Errorf("grpolicy: member access: panic: %v", r)
+		}
+	}()
+
 	rv := reflect.ValueOf(base)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return nil, fmt.Errorf("grpolicy: member access: base value is nil: %w", ErrAttributeMissing)
+		}
+		rv = rv.Elem()
+	}
+
 	switch rv.Kind() {
 	case reflect.Map:
 		return resolveMapMember(rv, propVal)
 	case reflect.Slice, reflect.Array:
 		return resolveIndexMember(rv, propVal)
+	case reflect.Struct:
+		return resolveStructMember(rv, propVal)
 	default:
 		return nil, fmt.Errorf("grpolicy: member access: unsupported base type %T: %w", base, ErrTypeMismatch)
 	}
@@ -325,6 +419,28 @@ func resolveIndexMember(rv reflect.Value, propVal any) (any, error) {
 		return nil, fmt.Errorf("grpolicy: member access: index %d out of range [0,%d): %w", idx, rv.Len(), ErrAttributeMissing)
 	}
 	return rv.Index(idx).Interface(), nil
+}
+
+// resolveStructMember resolves a string field name against a struct value
+// via reflect.Value.FieldByName, which also resolves embedded/promoted
+// fields for free (ordinary Go visibility rules). An unknown name and an
+// unexported field are both ErrAttributeMissing, deliberately indistinguishable
+// from the caller's perspective — an unexported field is exactly as "not
+// there" as a nonexistent one, never exposed even by probing for the
+// difference between the two error messages.
+func resolveStructMember(rv reflect.Value, propVal any) (any, error) {
+	name, ok := propVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("grpolicy: member access: struct field name has type %T, want string: %w", propVal, ErrTypeMismatch)
+	}
+	field := rv.FieldByName(name)
+	if !field.IsValid() {
+		return nil, fmt.Errorf("grpolicy: member access: %s has no field %q: %w", rv.Type(), name, ErrAttributeMissing)
+	}
+	if !field.CanInterface() {
+		return nil, fmt.Errorf("grpolicy: member access: %s field %q is unexported: %w", rv.Type(), name, ErrAttributeMissing)
+	}
+	return field.Interface(), nil
 }
 
 // isNilBase reports whether v is nil for member-access purposes — either an

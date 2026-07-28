@@ -10,6 +10,14 @@ import (
 	"github.com/gourdian25/grpolicy"
 )
 
+// fuzzMemberAccessInfo gives the fuzz target a struct-valued attribute
+// (Stage 3 of the member-access feature) with one exported and one
+// unexported field, reachable via the "info.Name"/"info.secret" seeds.
+type fuzzMemberAccessInfo struct {
+	Name   string
+	secret int
+}
+
 // FuzzCompileEvaluate feeds arbitrary strings as policy expressions (plus a
 // handful of primitive values used to populate a fixed attribute schema)
 // through Compile and Evaluate. eval.go is the one piece of code in this
@@ -71,6 +79,15 @@ func FuzzCompileEvaluate(f *testing.F) {
 		`roles[100]`,
 		`age[0]`,
 		`name[0]`,
+		`info.Name == name`,
+		`info.secret`,
+		`info.Missing`,
+		`a?.b`,
+		`a?.b?.c`,
+		`nested?.x == age`,
+		`a.b?.c.d`,
+		`a?.[0]`,
+		`a?.b[0]`,
 	}
 	for _, s := range seeds {
 		f.Add(s, 5, "hello", true)
@@ -97,6 +114,7 @@ func FuzzCompileEvaluate(f *testing.F) {
 			"score":   float64(i),
 			"roles":   []string{s, "admin"},
 			"nested":  map[string]any{"x": i, "y": s},
+			"info":    fuzzMemberAccessInfo{Name: s, secret: i},
 		}
 
 		type compileResult struct {

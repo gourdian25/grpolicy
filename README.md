@@ -161,9 +161,29 @@ allowed and a short-circuited denied decision.
   intermediate value is `ErrAttributeMissing`; a property of the wrong shape
   for its base (e.g. a string key against a slice, or indexing into a plain
   Go `string`) is `ErrTypeMismatch` — the same fail-loud rules as any other
-  attribute access, never silently coerced. Struct field access (via
-  reflection) and optional chaining (`?.`) are planned but not yet
-  implemented — see `docs/plan/member-access-support-plan.md`.
+  attribute access, never silently coerced. Also supported against a Go
+  `struct` (or pointer to one, dereferenced automatically through any number
+  of pointer levels): `resource.OwnerID` reads the exported field `OwnerID`
+  via reflection, including embedded/promoted fields. Field names are
+  case-sensitive, exact Go identifiers — `resource.ownerID` (lowercase) does
+  not match a field named `OwnerID`. An unexported field is reported exactly
+  like a nonexistent one (`ErrAttributeMissing`), never exposed even by
+  probing; method calls (`resource.Method()`) remain unsupported.
+- **Optional chaining**: `a?.b`, `a?.[0]`, multi-link chains like
+  `a.b?.c?.d`. `?.` guards against a **nil** value only — it never
+  suppresses a missing map key, out-of-range index, or unknown/unexported
+  struct field, all of which stay `ErrAttributeMissing` regardless of `?.`
+  anywhere in the expression. Once the first `?.` is reached walking
+  outward from the base, every subsequent **dot** link tunnels a nil
+  through to the end of the chain without evaluating anything further
+  (`a?.b.c.d` never touches `.c`/`.d` if `a` is nil); a link written
+  *before* the first `?.` is never protected (`a.b?.c` still fails loud on
+  a nil `a`). This matches `expr-lang/expr`'s own real parser/VM semantics
+  exactly, including one non-obvious asymmetry: a **bracket**-index
+  continuation immediately after a closed optional chain is *not*
+  protected (`a?.b[0]` still fails loud on a nil `a`) — only a bracket step
+  that is itself optional (`a?.b?.[0]`) tunnels. See `docs/architecture.md`
+  §12 for the full rule and how it was verified against the real library.
 
 ## Custom functions
 
@@ -292,10 +312,11 @@ Any RBAC/ABAC data modeling — grpolicy has no "role" or "permission" as a
 first-class type, only attribute maps; this boundary is deliberate (see
 `docs/plan/grpolicy-plan.md`). Policy storage — grpolicy never persists
 the expression string anywhere; where it comes from is entirely the
-caller's problem. Struct field access (via reflection) and optional
-chaining (`?.`) — planned, see `docs/plan/member-access-support-plan.md`
-(nested map/slice/array attribute access itself is supported; see
-[Expression language](#expression-language)). A policy authoring UI or CLI
+caller's problem. Method-call syntax (`resource.Method()`), slicing
+(`items[1:2]`), and indexing into a plain Go `string` — nested
+map/slice/array/struct attribute access, including optional chaining
+(`?.`), is supported; see [Expression language](#expression-language).
+A policy authoring UI or CLI
 validator tool.
 
 ## Contributing
