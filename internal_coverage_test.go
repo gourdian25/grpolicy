@@ -67,7 +67,7 @@ func TestExprText_OutOfBoundsSpanReturnsEmpty(t *testing.T) {
 
 // TestChildren_MemberNodeAndChainNode exercises children()'s new cases
 // directly (Stage 1 of the member-access feature — see
-// docs/plan/member-access-support-plan.md and docs/architecture.md §12).
+// docs/architecture.md §12).
 // MemberNode/ChainNode aren't evaluated yet at this stage, so this is the
 // only way to prove children() sees them before evalMember/evalChain exist.
 func TestChildren_MemberNodeAndChainNode(t *testing.T) {

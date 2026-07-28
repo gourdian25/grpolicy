@@ -1304,7 +1304,7 @@ func testExpressionTextIncludesClosingDelimiters(t *testing.T, newEngine func() 
 }
 
 // testMemberAccessCollections covers Stage 2 of the member-access feature
-// (docs/plan/member-access-support-plan.md, docs/architecture.md §12): dot
+// (docs/architecture.md §12): dot
 // and bracket access against map[string]any, general maps (via reflect),
 // and slices/arrays. No struct support yet (Stage 3) and no "?." yet
 // (Stage 4) — a nil base always fails loud here.
@@ -1605,7 +1605,7 @@ type memberAccessResource struct {
 }
 
 // testMemberAccessStructFields covers Stage 3 of the member-access feature
-// (docs/plan/member-access-support-plan.md, docs/architecture.md §12):
+// (docs/architecture.md §12):
 // struct field access via reflect, exported fields only, both dot and
 // bracket syntax, pointer-to-struct auto-dereferenced, embedded/promoted
 // fields, and the resolveMember panic-recovery backstop.
@@ -1741,7 +1741,7 @@ func testMemberAccessStructFields(t *testing.T, newEngine func() (grpolicy.Engin
 }
 
 // testOptionalChainShortCircuit covers Stage 4 of the member-access feature
-// (docs/plan/member-access-support-plan.md, docs/architecture.md §12):
+// (docs/architecture.md §12):
 // *ast.ChainNode / MemberNode.Optional short-circuit semantics, mirroring
 // testShortCircuitAndTrace's own falsifying-test discipline (a call
 // counter, not just a returned value, proves Property is genuinely never

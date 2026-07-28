@@ -216,9 +216,8 @@ program, not just the test suite, is what caught it.
 
 ## 12. Nested attribute access — `*ast.MemberNode`/`*ast.ChainNode` support
 
-Tracked stage-by-stage in `docs/plan/member-access-support-plan.md`. This
-section accumulates the decisions made along the way; entries are added as
-each stage lands, not all at once up front.
+Implemented stage-by-stage. This section accumulates the decisions made
+along the way.
 
 **AST shape, confirmed empirically against `expr-lang/expr@v1.17.8`'s actual
 source (not assumed), same discipline as §9/§11:**

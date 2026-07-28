@@ -437,7 +437,7 @@ func TestCompile_MemberCallTargetUnsupported(t *testing.T) {
 }
 
 // TestComplexity_MemberChainNodesAreCounted proves Stage 1 of the
-// member-access feature (docs/plan/member-access-support-plan.md) actually
+// member-access feature (docs/architecture.md §12) actually
 // fixes the latent complexity-undercounting gap: before children() knew
 // about *ast.MemberNode, a dotted chain of any depth counted as exactly one
 // opaque leaf node, so WithMaxComplexity's node-count limit silently didn't

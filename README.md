@@ -311,8 +311,8 @@ enforces.
 ## Out of scope (not currently supported)
 
 Any RBAC/ABAC data modeling — grpolicy has no "role" or "permission" as a
-first-class type, only attribute maps; this boundary is deliberate (see
-`docs/plan/grpolicy-plan.md`). Policy storage — grpolicy never persists
+first-class type, only attribute maps; this boundary is deliberate. Policy
+storage — grpolicy never persists
 the expression string anywhere; where it comes from is entirely the
 caller's problem. Method-call syntax (`resource.Method()`), slicing
 (`items[1:2]`), and indexing into a plain Go `string` — nested

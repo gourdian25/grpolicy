@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - 2026-07-28
 
 Nested attribute access (`*ast.MemberNode`/`*ast.ChainNode` support),
-implemented stage-by-stage per `docs/plan/member-access-support-plan.md`;
-see `docs/architecture.md` §12 for the full design record, including two
+implemented stage-by-stage; see `docs/architecture.md` §12 for the full
+design record, including two
 things discovered empirically rather than assumed: a latent
 complexity-undercounting gap in `WithMaxComplexity` that this closes as a
 side effect, and a genuine asymmetry in how `expr-lang/expr`'s own
