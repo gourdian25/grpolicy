@@ -213,3 +213,88 @@ surface whose entire value proposition is showing a human exactly what ran
 assertions on `Allowed`/`Result`/`Evaluated` alone will never catch, since
 it doesn't affect the boolean outcome at all. Running the actual example
 program, not just the test suite, is what caught it.
+
+## 12. Nested attribute access — `*ast.MemberNode`/`*ast.ChainNode` support
+
+Tracked stage-by-stage in `docs/plan/member-access-support-plan.md`. This
+section accumulates the decisions made along the way; entries are added as
+each stage lands, not all at once up front.
+
+**AST shape, confirmed empirically against `expr-lang/expr@v1.17.8`'s actual
+source (not assumed), same discipline as §9/§11:**
+
+```go
+type MemberNode struct {
+	base
+	Node     Node // base being accessed, e.g. "foo" in "foo.bar"
+	Property Node // dot access: always *ast.StringNode holding the literal
+	              // field name text. Bracket access "foo[X]": Property is X
+	              // itself, a fully general expression (*ast.StringNode for
+	              // foo["b"], *ast.IntegerNode for foo[0], *ast.IdentifierNode
+	              // for foo[i], etc.)
+	Optional bool // true for "foo?.bar" / "foo?.[bar]"
+	Method   bool // true only when this MemberNode is a CallNode's Callee
+}
+```
+
+One node kind covers *both* dot and bracket access — there is no separate
+`IndexNode`. `*ast.ChainNode{Node}` wraps a run of one-or-more
+`?.`-containing links.
+
+**`Location()` is a fragment for both, same class of bug as §11:** dot form's
+`MemberNode.Location()` covers only the property name (identical to
+`Property.Location()`); bracket form's covers only the bare `[`. Neither is
+useful directly. The fix, in `ast_helpers.go`'s `children()`/`nodeSpan`:
+
+- `children()` gained `*ast.MemberNode → [Node, Property]` and
+  `*ast.ChainNode → [Node]`. This is necessary *and* sufficient for
+  `measureComplexity` and `validateFunctionCalls` (both purely
+  `children()`-driven recursions, confirmed by reading `engine.go` in
+  full) to handle both kinds correctly with zero node-specific code of
+  their own — proven by `TestComplexity_MemberChainNodesAreCounted`
+  (`coverage_test.go`), which shows a real, previously-latent bug this
+  fixes: before this change, `children()` returned `nil` for `MemberNode`
+  (the generic leaf default), so a dotted chain of *any* depth counted as
+  exactly one opaque leaf node — `WithMaxComplexity`'s node-count limit
+  silently didn't apply to member-access depth at all, harmless only
+  because `Evaluate` unconditionally rejected every `MemberNode` anyway.
+- `nodeSpan`'s dot-form span falls out **for free** from the existing
+  generic children-span-union path once `Property` is in `children()` — no
+  bracket-matching needed, because the `.` separator sits inside the gap
+  the union already spans (proven by `TestNodeSpan_MemberNodeDotForm`,
+  covering both a single link and a multi-link chain).
+- `nodeSpan`'s bracket form needs the *same* `matchClosingFrom`-style fix §11
+  already applied to `CallNode`/`BuiltinNode`/`ArrayNode` — the naive union
+  would miss the trailing `]` (proven by `TestNodeSpan_MemberNodeBracketForm`).
+  Since `MemberNode` has no field distinguishing dot-vs-bracket syntax, the
+  two are told apart *structurally*: scan forward from the base's span for a
+  `[` immediately following it; if `matchClosingFrom` finds one there (its
+  return value differs from its input), it's bracket form; otherwise fall
+  through to the generic dot-form path. No new AST inspection needed beyond
+  what `matchClosingFrom` already provides.
+- `*ast.ChainNode` is a transparent wrapper for span purposes too — its own
+  `Location()` also covers only a fragment of the chain (confirmed
+  empirically, e.g. `a?.b`'s `ChainNode.Location()` is just `"b"`'s span), so
+  `nodeSpan` resolves it as exactly its wrapped node's own (already-correct)
+  span (proven by `TestNodeSpan_ChainNodeTransparent`).
+
+Traced `parser/parser.go`'s `parsePostfixExpression` line-by-line (relevant
+for a later stage's optional-chaining semantics, recorded here since it was
+discovered while researching this section): once any `?.` appears in a
+postfix chain, the parser wraps the **entire accumulated chain so far**
+(including earlier plain-`.` links) in one `ChainNode`, re-wrapping at every
+subsequent step — a link written *before* the first `?.` is never inside any
+`ChainNode`. Confirmed load-bearing (not cosmetic) by reading
+`compiler/compiler.go`'s `MemberNode`/`ChainNode` compilation:
+`OpJumpIfNil` is only ever emitted for an `Optional`-flagged `MemberNode`
+when `len(c.chains) > 0`, i.e. only for links reachable inside a `ChainNode`
+— so expr-lang's own nil-guard is genuinely asymmetric around the first
+`?.`, not just an artifact of how the tree prints. A later stage's
+`evalMember`/`evalChain` must replicate this exact asymmetry to stay
+faithful to what the syntax actually means.
+
+At this stage, `eval()` still has no case for `*ast.MemberNode`/
+`*ast.ChainNode` — both still hit the existing "unsupported expression node"
+default. Evaluation support, the sentinel-error bucketing decision, and the
+optional-chaining short-circuit semantics are recorded in this section as
+later stages land.
