@@ -9,10 +9,10 @@
 // about "users," "roles," or "permissions." Given a compiled boolean
 // expression and a map[string]any of attributes, it returns a Decision
 // (Allowed plus an explainable Trace of exactly how that result was
-// reached). It is the future grauth repo's primary dependency: every
-// RBAC/ABAC decision grauth makes will route through grpolicy.Evaluate,
-// with grauth owning the vocabulary of "who has which role" and grpolicy
-// only ever seeing attribute maps.
+// reached). It is the grauth repo's primary dependency: every RBAC/ABAC
+// decision grauth makes routes through grpolicy.Evaluate, with grauth
+// owning the vocabulary of "who has which role" and grpolicy only ever
+// seeing attribute maps.
 //
 // # Key Features
 //   - Boolean logic (&&, ||, !/not), comparisons (==, !=, <, <=, >, >=),
@@ -110,9 +110,9 @@
 // # Out of Scope
 //
 // grpolicy has no concept of "role" or "permission" as first-class types —
-// only attribute maps; if implementation pressure from a future grauth
-// design starts pulling role/permission vocabulary in here, that is a sign
-// the boundary is wrong, not a reason to add it. grpolicy never persists
+// only attribute maps; if implementation pressure from grauth's own design
+// starts pulling role/permission vocabulary in here, that is a sign the
+// boundary is wrong, not a reason to add it. grpolicy never persists
 // policy text anywhere — where the expression string comes from (a config
 // file, a database row, a hardcoded string) is entirely the caller's
 // problem. Nested map/slice/array/struct attribute access, including

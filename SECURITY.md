@@ -6,8 +6,8 @@ Security fixes are applied to the latest released minor version.
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | ✅        |
-| < 0.1   | ❌        |
+| 0.3.x   | ✅        |
+| < 0.3   | ❌        |
 
 ## Reporting a Vulnerability
 
@@ -26,9 +26,9 @@ advisory will be published together with a patched release.
 
 ## Scope Notes
 
-grpolicy is a policy/expression evaluation engine that will gate real
-access decisions once `grauth` (its primary consumer) exists. Read this
-before relying on it for anything security-relevant:
+grpolicy is a policy/expression evaluation engine that gates real access
+decisions in `grauth` (its primary consumer). Read this before relying on
+it for anything security-relevant:
 
 - **No code execution beyond registered functions.** grpolicy never calls
   `expr-lang/expr`'s own `Run`/`vm.Program` execution path — only

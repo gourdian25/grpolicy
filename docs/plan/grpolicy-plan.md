@@ -181,7 +181,12 @@ confirmed before proceeding.
   manages, a hardcoded string) is entirely the caller's problem.
 - **Wildcard/hierarchical attribute paths** (e.g. `user.address.city`) — v1
   attributes are flat `map[string]any`; nested-path access is a v0.2+
-  candidate if real usage in `grauth` demands it.
+  candidate if real usage in `grauth` demands it. **Implemented in v0.3.0**
+  — see `CHANGELOG.md` and `docs/architecture.md` §12 for what shipped
+  (map/slice/array/struct access, dot and bracket syntax, optional
+  chaining) and `docs/plan/member-access-support-plan.md` for how. This
+  bullet is left in place as the historical record of the original v1
+  scoping decision, not because the limitation still holds.
 - **A policy authoring UI or CLI validator tool** — out of scope for the
   library itself.
 
@@ -386,7 +391,8 @@ question.
 
 ## 11. Roadmap (v0.2+)
 
-- Nested/hierarchical attribute paths (`user.address.city`).
+- Nested/hierarchical attribute paths (`user.address.city`). **Implemented
+  in v0.3.0** — see `CHANGELOG.md` / `docs/architecture.md` §12.
 - A policy-linting/validation CLI tool.
 - Performance: precompiled policy "warm cache" pre-population, if `grauth`
   usage patterns reveal cold-compile latency matters in practice.

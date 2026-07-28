@@ -73,7 +73,7 @@ form needs the same `matchClosingFrom`-style fix as `CallNode`/`ArrayNode`.
 | 2 | `evalMember` over `map[string]any`, general maps, slices/arrays — dot **and** bracket syntax, no structs, no `?.` yet | Done |
 | 3 | `evalMember` extended to Go structs via `reflect` (pointer deref, exported-field lookup, panic-recovery backstop) | Done |
 | 4 | `*ast.ChainNode` + `MemberNode.Optional` — asymmetric short-circuit semantics, transparent `ChainNode` trace | Done |
-| 5 | Finalize: version bump, CHANGELOG, README/docs.go/architecture.md closing pass, full regression + longer fuzz run | Not started |
+| 5 | Finalize: version bump, CHANGELOG, README/docs.go/architecture.md closing pass, full regression + longer fuzz run | Done |
 
 Each of stages 1–4 updates its own slice of `README.md` / `docs.go` /
 `docs/architecture.md` §12 (new) / `CHANGELOG.md` / `fuzz_test.go` seeds in
