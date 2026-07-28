@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,6 +51,9 @@ func runEngineContract(t *testing.T, newEngine func() (grpolicy.Engine, error)) 
 	t.Run("EngineOptionsAndLogger", func(t *testing.T) { testEngineOptionsAndLogger(t) })
 	t.Run("FunctionCallDispatchEdgeCases", func(t *testing.T) { testFunctionCallDispatchEdgeCases(t, newEngine) })
 	t.Run("ExpressionTextIncludesClosingDelimiters", func(t *testing.T) { testExpressionTextIncludesClosingDelimiters(t, newEngine) })
+	t.Run("MemberAccessCollections", func(t *testing.T) { testMemberAccessCollections(t, newEngine) })
+	t.Run("MemberAccessStructFields", func(t *testing.T) { testMemberAccessStructFields(t, newEngine) })
+	t.Run("OptionalChainShortCircuit", func(t *testing.T) { testOptionalChainShortCircuit(t, newEngine) })
 }
 
 func testBooleanOperators(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
@@ -1245,6 +1249,7 @@ func testExpressionTextIncludesClosingDelimiters(t *testing.T, newEngine func() 
 		{"OneArgCall", "double(x) == 10", map[string]any{"x": 5}, "double(x)"},
 		{"NestedCall", "double(double(x)) == 20", map[string]any{"x": 5}, "double(double(x))"},
 		{"ArrayLiteral", "x in [1, 2, 3]", map[string]any{"x": 2}, "x"}, // left child is "x"; right child checked separately below
+		{"MemberBracketAccess", `resource["ownerID"] == "u1"`, map[string]any{"resource": map[string]any{"ownerID": "u1"}}, `resource["ownerID"]`},
 	}
 
 	for _, c := range cases {
@@ -1279,6 +1284,650 @@ func testExpressionTextIncludesClosingDelimiters(t *testing.T, newEngine func() 
 		right := decision.Trace[0].Children[1]
 		if right.Expression != "[1, 2, 3]" {
 			t.Fatalf("array literal Expression = %q, want %q (closing bracket must not be dropped)", right.Expression, "[1, 2, 3]")
+		}
+	})
+
+	t.Run("MemberBracketClosingBracket", func(t *testing.T) {
+		policy, err := engine.Compile(`resource["ownerID"] == "u1"`)
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		decision, err := policy.Evaluate(ctx, map[string]any{"resource": map[string]any{"ownerID": "u1"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		left := decision.Trace[0].Children[0]
+		if left.Expression != `resource["ownerID"]` {
+			t.Fatalf(`member bracket-access Expression = %q, want %q (closing bracket must not be dropped)`, left.Expression, `resource["ownerID"]`)
+		}
+	})
+}
+
+// testMemberAccessCollections covers Stage 2 of the member-access feature
+// (docs/plan/member-access-support-plan.md, docs/architecture.md §12): dot
+// and bracket access against map[string]any, general maps (via reflect),
+// and slices/arrays. No struct support yet (Stage 3) and no "?." yet
+// (Stage 4) — a nil base always fails loud here.
+func testMemberAccessCollections(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
+	t.Helper()
+	ctx := context.Background()
+
+	newPolicy := func(t *testing.T, expr string) grpolicy.CompiledPolicy {
+		t.Helper()
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		t.Cleanup(func() { _ = engine.Close() })
+		policy, err := engine.Compile(expr)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", expr, err)
+		}
+		return policy
+	}
+
+	t.Run("DotAndBracketAccessProduceSameResult", func(t *testing.T) {
+		attrs := map[string]any{"resource": map[string]any{"ownerID": "u1"}}
+
+		dotDecision, err := newPolicy(t, `resource.ownerID == "u1"`).Evaluate(ctx, attrs)
+		if err != nil {
+			t.Fatalf("Evaluate(dot): %v", err)
+		}
+		if !dotDecision.Allowed {
+			t.Fatalf("dot access Allowed = false, want true")
+		}
+
+		bracketDecision, err := newPolicy(t, `resource["ownerID"] == "u1"`).Evaluate(ctx, attrs)
+		if err != nil {
+			t.Fatalf("Evaluate(bracket): %v", err)
+		}
+		if !bracketDecision.Allowed {
+			t.Fatalf("bracket access Allowed = false, want true")
+		}
+
+		dotMember := dotDecision.Trace[0].Children[0]
+		bracketMember := bracketDecision.Trace[0].Children[0]
+		if len(dotMember.Children) != 2 || len(bracketMember.Children) != 2 {
+			t.Fatalf("MemberNode Children = %d, %d, want 2, 2 (base + property, uniform for dot and bracket)", len(dotMember.Children), len(bracketMember.Children))
+		}
+		if dotMember.Result != "u1" || bracketMember.Result != "u1" {
+			t.Fatalf("MemberNode Result = %v, %v, want u1, u1", dotMember.Result, bracketMember.Result)
+		}
+	})
+
+	t.Run("MissingMapKeyFailsLoud", func(t *testing.T) {
+		decision, err := newPolicy(t, "resource.missingField").Evaluate(ctx, map[string]any{"resource": map[string]any{"ownerID": "u1"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true on error, want false")
+		}
+		if len(decision.Trace) != 1 {
+			t.Fatalf("Trace has %d root nodes, want 1 (partial trace must still be populated)", len(decision.Trace))
+		}
+	})
+
+	t.Run("NonStringKeyAgainstMapIsTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, "resource[0]").Evaluate(ctx, map[string]any{"resource": map[string]any{"ownerID": "u1"}})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("SliceIndexAccess", func(t *testing.T) {
+		decision, err := newPolicy(t, `items[1] == "b"`).Evaluate(ctx, map[string]any{"items": []string{"a", "b", "c"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("ArrayIndexAccess", func(t *testing.T) {
+		decision, err := newPolicy(t, "items[2] == 3").Evaluate(ctx, map[string]any{"items": [3]int{1, 2, 3}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("OutOfRangeIndexFailsLoud", func(t *testing.T) {
+		_, err := newPolicy(t, "items[10]").Evaluate(ctx, map[string]any{"items": []string{"a", "b"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NegativeIndexFailsLoud", func(t *testing.T) {
+		// Written as items[i] with i = -1 rather than the literal
+		// "items[-1]": expr-lang/expr parses a leading "-" as *ast.UnaryNode,
+		// which grpolicy's evalUnary doesn't support (only "!"/"not") — that
+		// would fail for an unrelated reason before ever reaching
+		// resolveMember, so a negative *value* has to arrive via an
+		// attribute instead.
+		_, err := newPolicy(t, "items[i]").Evaluate(ctx, map[string]any{"items": []string{"a", "b"}, "i": -1})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NonIntegerIndexAgainstSliceIsTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, `items["x"]`).Evaluate(ctx, map[string]any{"items": []string{"a", "b"}})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("NilMapBaseFailsLoud", func(t *testing.T) {
+		var nilMap map[string]any
+		_, err := newPolicy(t, "resource.ownerID").Evaluate(ctx, map[string]any{"resource": nilMap})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NilSliceBaseFailsLoud", func(t *testing.T) {
+		var nilSlice []string
+		_, err := newPolicy(t, "items[0]").Evaluate(ctx, map[string]any{"items": nilSlice})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("StringBaseIndexingUnsupported", func(t *testing.T) {
+		_, err := newPolicy(t, "name[0]").Evaluate(ctx, map[string]any{"name": "hello"})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("NestedMemberChainThreeLevelsDeep", func(t *testing.T) {
+		decision, err := newPolicy(t, "a.b.c == 5").Evaluate(ctx, map[string]any{
+			"a": map[string]any{"b": map[string]any{"c": 5}},
+		})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("GenericMapNonStringKeyType", func(t *testing.T) {
+		decision, err := newPolicy(t, `scores[1] == "b"`).Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b", 2: "c"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("GenericMapMissingKeyFailsLoud", func(t *testing.T) {
+		_, err := newPolicy(t, "scores[99]").Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("GenericMapKeyTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, `scores["x"]`).Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b"}})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("GenericMapConvertibleNumericKey", func(t *testing.T) {
+		// propVal ("1") arrives as a plain Go int (IntegerNode's literal
+		// type) but the map's key type is int64 — not directly assignable,
+		// but numerically convertible, exercising resolveMapMember's
+		// Convert path (distinct from GenericMapNonStringKeyType above,
+		// where the key type is already a plain int and needs no convert).
+		decision, err := newPolicy(t, `scores[1] == "y"`).Evaluate(ctx, map[string]any{"scores": map[int64]string{1: "y"}})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("GenericMapNilKeyIsTypeMismatch", func(t *testing.T) {
+		_, err := newPolicy(t, "scores[k]").Evaluate(ctx, map[string]any{"scores": map[int]string{1: "b"}, "k": nil})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("MissingBaseIdentifierFailsLoud", func(t *testing.T) {
+		// "resource" itself isn't in attrs at all — the error must
+		// propagate up from evalIdentifier through evalMember unchanged,
+		// distinct from every other test above where "resource"/"items" is
+		// present but nil, missing a key, or out of range.
+		_, err := newPolicy(t, "resource.ownerID").Evaluate(ctx, map[string]any{})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("MissingPropertyIdentifierFailsLoud", func(t *testing.T) {
+		// Bracket-form property is itself an expression (an identifier
+		// here) that can fail independently of the base.
+		_, err := newPolicy(t, "items[i]").Evaluate(ctx, map[string]any{"items": []string{"a", "b"}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("UntypedNilBaseFailsLoud", func(t *testing.T) {
+		// A literal untyped nil stored in attrs, distinct from
+		// NilMapBaseFailsLoud/NilSliceBaseFailsLoud above (a typed nil
+		// map/slice, which is never == nil as a bare interface comparison).
+		_, err := newPolicy(t, "resource.ownerID").Evaluate(ctx, map[string]any{"resource": nil})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("IndexKindCoercionMatrix", func(t *testing.T) {
+		// Every integer kind an attribute value might actually carry (no
+		// float truncation — that's NonIntegerIndexAgainstSliceIsTypeMismatch
+		// above), mirroring testTypeCoercionMatrix's own numeric-kind
+		// coverage style for compareValues/toFloat.
+		cases := []struct {
+			name string
+			idx  any
+		}{
+			{"Int8", int8(1)},
+			{"Int16", int16(1)},
+			{"Int32", int32(1)},
+			{"Int64", int64(1)},
+			{"Uint", uint(1)},
+			{"Uint8", uint8(1)},
+			{"Uint16", uint16(1)},
+			{"Uint32", uint32(1)},
+			{"Uint64", uint64(1)},
+		}
+		policy := newPolicy(t, `items[i] == "b"`)
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				decision, err := policy.Evaluate(ctx, map[string]any{"items": []string{"a", "b", "c"}, "i": c.idx})
+				if err != nil {
+					t.Fatalf("Evaluate: %v", err)
+				}
+				if !decision.Allowed {
+					t.Fatalf("Allowed = false, want true for index type %T", c.idx)
+				}
+			})
+		}
+	})
+
+	t.Run("IndexOverflowGuardFailsLoud", func(t *testing.T) {
+		// uint/uint64 are the only kinds toInt guards against overflowing
+		// int on the 64-bit platforms grpolicy targets (see toInt's doc
+		// comment) — a value this large must be a type mismatch, never
+		// silently wrapped to a negative/bogus index.
+		cases := []struct {
+			name string
+			idx  any
+		}{
+			{"UintTooLarge", uint(math.MaxUint64)},
+			{"Uint64TooLarge", uint64(math.MaxUint64)},
+		}
+		policy := newPolicy(t, "items[i]")
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				_, err := policy.Evaluate(ctx, map[string]any{"items": []string{"a", "b"}, "i": c.idx})
+				if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+					t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+				}
+			})
+		}
+	})
+}
+
+// memberAccessInner/memberAccessResource support testMemberAccessStructFields
+// (Stage 3 of the member-access feature): an embedded type to prove
+// FieldByName resolves promoted fields, an exported field, and an
+// unexported field to prove it's never exposed even by probing.
+type memberAccessInner struct {
+	City string
+}
+
+type memberAccessResource struct {
+	memberAccessInner
+	OwnerID string
+	secret  string // deliberately unexported — accessed only via reflect in the test itself
+}
+
+// testMemberAccessStructFields covers Stage 3 of the member-access feature
+// (docs/plan/member-access-support-plan.md, docs/architecture.md §12):
+// struct field access via reflect, exported fields only, both dot and
+// bracket syntax, pointer-to-struct auto-dereferenced, embedded/promoted
+// fields, and the resolveMember panic-recovery backstop.
+func testMemberAccessStructFields(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
+	t.Helper()
+	ctx := context.Background()
+
+	newPolicy := func(t *testing.T, expr string) grpolicy.CompiledPolicy {
+		t.Helper()
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		t.Cleanup(func() { _ = engine.Close() })
+		policy, err := engine.Compile(expr)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", expr, err)
+		}
+		return policy
+	}
+
+	t.Run("ExportedFieldDotAndBracketAccess", func(t *testing.T) {
+		resource := memberAccessResource{OwnerID: "u1"}
+
+		dotDecision, err := newPolicy(t, `resource.OwnerID == "u1"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate(dot): %v", err)
+		}
+		if !dotDecision.Allowed {
+			t.Fatalf("dot field access Allowed = false, want true")
+		}
+
+		bracketDecision, err := newPolicy(t, `resource["OwnerID"] == "u1"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate(bracket): %v", err)
+		}
+		if !bracketDecision.Allowed {
+			t.Fatalf("bracket field access Allowed = false, want true")
+		}
+	})
+
+	t.Run("UnexportedFieldFailsLoudNotPanics", func(t *testing.T) {
+		// Reaching this assertion at all (rather than crashing the test
+		// binary) is itself part of the proof, same framing as this repo's
+		// existing CustomFunctionPanicIsRecoveredNotCrashed.
+		resource := memberAccessResource{OwnerID: "u1", secret: "s"}
+		_, err := newPolicy(t, "resource.secret").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("UnknownFieldNameFailsLoud", func(t *testing.T) {
+		resource := memberAccessResource{OwnerID: "u1"}
+		_, err := newPolicy(t, "resource.NoSuchField").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("PointerToStructDereferencedAutomatically", func(t *testing.T) {
+		resource := &memberAccessResource{OwnerID: "u1"}
+		decision, err := newPolicy(t, `resource.OwnerID == "u1"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("NilPointerBaseFailsLoudNotPanics", func(t *testing.T) {
+		var resource *memberAccessResource
+		_, err := newPolicy(t, "resource.OwnerID").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("NilInnerPointerAfterOuterDereferenceFailsLoud", func(t *testing.T) {
+		// A non-nil **memberAccessResource pointing to a nil
+		// *memberAccessResource: isNilBase (checked before resolveMember is
+		// ever called) only sees the outer pointer, which isn't nil — the
+		// nil is only discovered one level in, exercising resolveMember's
+		// own pointer-deref loop's nil check, distinct from
+		// NilPointerBaseFailsLoudNotPanics above (a nil pointer at the
+		// outermost level, caught by isNilBase itself).
+		var inner *memberAccessResource
+		outer := &inner
+		_, err := newPolicy(t, "resource.OwnerID").Evaluate(ctx, map[string]any{"resource": outer})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("EmbeddedPromotedFieldReachable", func(t *testing.T) {
+		resource := memberAccessResource{memberAccessInner: memberAccessInner{City: "NYC"}}
+		decision, err := newPolicy(t, `resource.City == "NYC"`).Evaluate(ctx, map[string]any{"resource": resource})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("Allowed = false, want true")
+		}
+	})
+
+	t.Run("NonStringPropertyAgainstStructIsTypeMismatch", func(t *testing.T) {
+		resource := memberAccessResource{OwnerID: "u1"}
+		_, err := newPolicy(t, "resource[0]").Evaluate(ctx, map[string]any{"resource": resource})
+		if !errors.Is(err, grpolicy.ErrTypeMismatch) {
+			t.Fatalf("Evaluate error = %v, want ErrTypeMismatch", err)
+		}
+	})
+
+	t.Run("UnhashableGenericMapKeyPanicRecovered", func(t *testing.T) {
+		// A real, reachable-via-public-API panic source: reflect.Value.
+		// MapIndex panics ("hash of unhashable type") when the map's key
+		// type is an interface (any concrete type is AssignableTo it, so
+		// resolveMapMember's own pre-checks never reject it) and the actual
+		// key value's dynamic type isn't hashable (a slice here) — confirmed
+		// empirically, not assumed, before writing this test. This proves
+		// resolveMember's recover backstop (added alongside struct support
+		// in this stage) actually recovers, rather than crashing the
+		// process — reaching the assertion at all is part of the proof.
+		_, err := newPolicy(t, "m[k]").Evaluate(ctx, map[string]any{
+			"m": map[any]string{"x": "y"},
+			"k": []int{1, 2, 3},
+		})
+		if err == nil {
+			t.Fatal("Evaluate error = nil, want a non-nil error (panic must be recovered, not crash the process)")
+		}
+	})
+}
+
+// testOptionalChainShortCircuit covers Stage 4 of the member-access feature
+// (docs/plan/member-access-support-plan.md, docs/architecture.md §12):
+// *ast.ChainNode / MemberNode.Optional short-circuit semantics, mirroring
+// testShortCircuitAndTrace's own falsifying-test discipline (a call
+// counter, not just a returned value, proves Property is genuinely never
+// evaluated on the short-circuit path).
+//
+// The asymmetric rule this proves (verified empirically against real
+// expr-lang/expr — see docs/architecture.md §12, Decision B): once the
+// first "?." is hit walking outward from the base, every subsequent DOT
+// link tunnels a nil through to the end, regardless of that link's own
+// Optional flag; a link written *before* the first "?." is never
+// protected; and — the non-obvious part — a BRACKET-index link
+// immediately following a closed chain (i.e. "a?.b[0]") is *not*
+// protected either, because expr-lang/expr's own parser doesn't fold a
+// bracket continuation into the same ChainNode the way it does a dot
+// continuation (confirmed against real expr-lang/expr's own VM, which
+// raises its own runtime error for exactly this shape, not a graceful
+// nil) — only a bracket step that is *itself* optional ("?.[") is
+// protected.
+func testOptionalChainShortCircuit(t *testing.T, newEngine func() (grpolicy.Engine, error)) {
+	t.Helper()
+	ctx := context.Background()
+
+	newPolicy := func(t *testing.T, engine grpolicy.Engine, expr string) grpolicy.CompiledPolicy {
+		t.Helper()
+		policy, err := engine.Compile(expr)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", expr, err)
+		}
+		return policy
+	}
+
+	t.Run("NilBaseShortCircuitsSingleLink", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		decision, err := newPolicy(t, engine, "a?.b").Evaluate(ctx, map[string]any{"a": nil})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false (a tunneled nil is never truthy)")
+		}
+		if len(decision.Trace) != 1 {
+			t.Fatalf("Trace has %d root nodes, want 1", len(decision.Trace))
+		}
+		root := decision.Trace[0]
+		if !root.Evaluated {
+			t.Fatalf("root.Evaluated = false, want true (a tunneled-to-nil link has a definite, legitimate value: nil)")
+		}
+		if root.Result != nil {
+			t.Fatalf("root.Result = %#v, want nil", root.Result)
+		}
+		if len(root.Children) != 2 || root.Children[1].Evaluated {
+			t.Fatalf("root.Children[1] (Property) Evaluated = %v, want false — Property must never be evaluated on the short-circuit path", root.Children[1].Evaluated)
+		}
+	})
+
+	t.Run("NilIntermediateShortCircuitsRemainingLinksWithoutSideEffects", func(t *testing.T) {
+		// a?.b?.[expensiveIndex()]: the bracket step is itself optional
+		// ("?.["), so — unlike the unprotected a?.b[expensiveIndex()]
+		// shape covered by BracketContinuationAfterOptionalChainIsNotProtected
+		// below — this one *does* tunnel, and expensiveIndex() must never
+		// be called (confirmed empirically against real expr-lang/expr
+		// before writing this test: it returns nil with the call count at
+		// zero for exactly this shape).
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		var calls int32
+		if err := engine.RegisterFunction("expensiveIndex", func() int {
+			atomic.AddInt32(&calls, 1)
+			return 0
+		}); err != nil {
+			t.Fatalf("RegisterFunction: %v", err)
+		}
+
+		decision, err := newPolicy(t, engine, "a?.b?.[expensiveIndex()]").Evaluate(ctx, map[string]any{"a": nil})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if got := atomic.LoadInt32(&calls); got != 0 {
+			t.Fatalf("expensiveIndex() was called %d times, want 0 — nil tunnel did not actually prevent Property evaluation", got)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false")
+		}
+	})
+
+	t.Run("LinkBeforeFirstOptionalIsNotProtected", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "a.b?.c").Evaluate(ctx, map[string]any{"a": nil})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing (a.b is written before the first '?.', never protected)", err)
+		}
+	})
+
+	t.Run("PlainDotAfterFirstOptionalStillTunnels", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		decision, err := newPolicy(t, engine, "a?.b.c.d").Evaluate(ctx, map[string]any{"a": nil})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false")
+		}
+	})
+
+	t.Run("BracketContinuationAfterOptionalChainIsNotProtected", func(t *testing.T) {
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "a?.b[0]").Evaluate(ctx, map[string]any{"a": nil})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing (a bracket-index continuation right after a closed chain is not protected — see docs/architecture.md §12)", err)
+		}
+	})
+
+	t.Run("MissingKeyUnderOptionalStillFailsLoud", func(t *testing.T) {
+		// Decision A: "?." guards against nil, never against absence.
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "resource?.missingKey").Evaluate(ctx, map[string]any{"resource": map[string]any{"present": true}})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("MissingBaseIdentifierStillFailsLoudEvenUnderOptional", func(t *testing.T) {
+		// "a" isn't in attrs at all — absence of the base identifier itself
+		// is a hard error regardless of "?." anywhere in the expression,
+		// distinct from NilBaseShortCircuitsSingleLink above (where "a" is
+		// present but its value is nil).
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		_, err = newPolicy(t, engine, "a?.b").Evaluate(ctx, map[string]any{})
+		if !errors.Is(err, grpolicy.ErrAttributeMissing) {
+			t.Fatalf("Evaluate error = %v, want ErrAttributeMissing", err)
+		}
+	})
+
+	t.Run("LegitimatelyNilValueTunnelsSameAsShortCircuit", func(t *testing.T) {
+		// "owner" genuinely exists as a key and genuinely stores nil (not a
+		// missing key, not a "resource" that's itself nil) — tunnels
+		// identically to any other nil, indistinguishable by design (see
+		// docs/architecture.md §12).
+		engine, err := newEngine()
+		if err != nil {
+			t.Fatalf("newEngine: %v", err)
+		}
+		defer engine.Close()
+
+		decision, err := newPolicy(t, engine, "resource.owner?.name").Evaluate(ctx, map[string]any{
+			"resource": map[string]any{"owner": nil},
+		})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatalf("Allowed = true, want false")
 		}
 	})
 }

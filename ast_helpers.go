@@ -21,6 +21,10 @@ func children(n ast.Node) []ast.Node {
 		return node.Arguments
 	case *ast.ArrayNode:
 		return node.Nodes
+	case *ast.MemberNode:
+		return []ast.Node{node.Node, node.Property}
+	case *ast.ChainNode:
+		return []ast.Node{node.Node}
 	default:
 		// Leaf nodes: IdentifierNode, StringNode, IntegerNode, FloatNode,
 		// BoolNode, NilNode, and anything else grpolicy doesn't specially
@@ -83,6 +87,29 @@ func nodeSpan(n ast.Node, source string) (from, to int) {
 		loc := node.Location()
 		// ArrayNode.Location() starts at "[" itself (confirmed empirically).
 		return loc.From, matchClosingFrom(source, loc.From, '[', ']')
+	case *ast.ChainNode:
+		// ChainNode is a transparent wrapper around an optional-chaining
+		// MemberNode run (see docs/architecture.md §12) — its own Location()
+		// covers only a fragment of the chain, so its span is exactly its
+		// wrapped node's own (already-correct) span.
+		return nodeSpan(node.Node, source)
+	case *ast.MemberNode:
+		// MemberNode.Location() covers only the property name (dot form) or
+		// the bare "[" (bracket form) — neither is useful directly (see
+		// docs/architecture.md §12). Dot form's correct span falls out of
+		// the generic children-span-union path below once Property is in
+		// children(), so only bracket form needs special handling here: look
+		// for a "[" immediately after the base's span and, if found, match
+		// its balanced close (the same trailing-delimiter problem already
+		// fixed for CallNode/BuiltinNode/ArrayNode). matchClosingFrom returns
+		// its input unchanged when no "[" is found there, which is exactly
+		// how dot form is told apart from bracket form: no new AST field
+		// distinguishes them, so this has to be detected structurally.
+		nodeFrom, nodeTo := nodeSpan(node.Node, source)
+		if to := matchClosingFrom(source, nodeTo, '[', ']'); to != nodeTo {
+			return nodeFrom, to
+		}
+		// Dot form: fall through to the generic path below.
 	}
 
 	loc := n.Location()

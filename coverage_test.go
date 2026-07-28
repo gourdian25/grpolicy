@@ -436,6 +436,27 @@ func TestCompile_MemberCallTargetUnsupported(t *testing.T) {
 	}
 }
 
+// TestComplexity_MemberChainNodesAreCounted proves Stage 1 of the
+// member-access feature (docs/plan/member-access-support-plan.md) actually
+// fixes the latent complexity-undercounting gap: before children() knew
+// about *ast.MemberNode, a dotted chain of any depth counted as exactly one
+// opaque leaf node, so WithMaxComplexity's node-count limit silently didn't
+// apply to member-access depth. "a.b.c.d.e" is 5 links — each contributing
+// both a MemberNode and a StringNode property to the count — which must now
+// exceed a limit of 3 total nodes.
+func TestComplexity_MemberChainNodesAreCounted(t *testing.T) {
+	engine, err := grpolicy.NewEngine(grpolicy.WithMaxComplexity(3, 100))
+	if err != nil {
+		t.Fatalf("NewEngine(WithMaxComplexity): %v", err)
+	}
+	defer engine.Close()
+
+	_, err = engine.Compile("a.b.c.d.e")
+	if !errors.Is(err, grpolicy.ErrTooComplex) {
+		t.Fatalf("Compile(a.b.c.d.e) error = %v, want ErrTooComplex", err)
+	}
+}
+
 // TestEval_UnaryMinusUnsupported exercises evalUnary's default case: "-x"
 // parses as a valid *ast.UnaryNode (expr-lang/expr supports unary minus
 // generally), but grpolicy's evaluator only implements "!"/"not" — there is

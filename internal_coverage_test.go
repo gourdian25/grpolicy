@@ -3,6 +3,7 @@
 package grpolicy
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -61,6 +62,118 @@ func TestExprText_OutOfBoundsSpanReturnsEmpty(t *testing.T) {
 
 	if got := exprText(n, "short"); got != "" {
 		t.Fatalf("exprText (out-of-bounds span) = %q, want %q", got, "")
+	}
+}
+
+// TestChildren_MemberNodeAndChainNode exercises children()'s new cases
+// directly (Stage 1 of the member-access feature — see
+// docs/plan/member-access-support-plan.md and docs/architecture.md §12).
+// MemberNode/ChainNode aren't evaluated yet at this stage, so this is the
+// only way to prove children() sees them before evalMember/evalChain exist.
+func TestChildren_MemberNodeAndChainNode(t *testing.T) {
+	base := &ast.IdentifierNode{Value: "a"}
+	prop := &ast.StringNode{Value: "b"}
+	member := &ast.MemberNode{Node: base, Property: prop}
+
+	got := children(member)
+	if len(got) != 2 || got[0] != ast.Node(base) || got[1] != ast.Node(prop) {
+		t.Fatalf("children(MemberNode) = %v, want [base, prop]", got)
+	}
+
+	chain := &ast.ChainNode{Node: member}
+	gotChain := children(chain)
+	if len(gotChain) != 1 || gotChain[0] != ast.Node(member) {
+		t.Fatalf("children(ChainNode) = %v, want [member]", gotChain)
+	}
+}
+
+// TestEvalChain_NonMemberNodeDefensiveFallback exercises evalChain's
+// defensive fallback branch directly. Unreachable via Compile+Evaluate:
+// expr-lang/expr's real parser only ever wraps a *ast.MemberNode (run) in a
+// *ast.ChainNode (confirmed empirically while tracing parsePostfixExpression
+// for docs/architecture.md §12) — covered here by driving a walker directly
+// against a hand-built ChainNode wrapping something else.
+func TestEvalChain_NonMemberNodeDefensiveFallback(t *testing.T) {
+	ident := &ast.IdentifierNode{Value: "a"}
+	chain := &ast.ChainNode{Node: ident}
+
+	w := &walker{ctx: context.Background(), attrs: map[string]any{"a": 5}, fns: newFunctionRegistry(), source: "a"}
+	val, _, err := w.evalChain(chain)
+	if err != nil {
+		t.Fatalf("evalChain fallback: %v", err)
+	}
+	if val != 5 {
+		t.Fatalf("evalChain fallback value = %v, want 5 (fallback should delegate to eval(node.Node))", val)
+	}
+}
+
+// TestNodeSpan_MemberNodeDotForm proves the generic children-span-union path
+// (now that MemberNode is in children()) produces the correct span for dot
+// access with no bracket-matching needed, for both a single link and a
+// multi-link chain.
+func TestNodeSpan_MemberNodeDotForm(t *testing.T) {
+	source := "a.b"
+	base := &ast.IdentifierNode{Value: "a"}
+	base.SetLocation(file.Location{From: 0, To: 1})
+	prop := &ast.StringNode{Value: "b"}
+	prop.SetLocation(file.Location{From: 2, To: 3})
+	member := &ast.MemberNode{Node: base, Property: prop}
+	member.SetLocation(file.Location{From: 2, To: 3}) // MemberNode.Location() covers only the property, per expr-lang/expr.
+
+	if got := exprText(member, source); got != "a.b" {
+		t.Fatalf("exprText(a.b) = %q, want %q", got, "a.b")
+	}
+
+	source2 := "a.b.c"
+	base2 := &ast.IdentifierNode{Value: "a"}
+	base2.SetLocation(file.Location{From: 0, To: 1})
+	prop2 := &ast.StringNode{Value: "b"}
+	prop2.SetLocation(file.Location{From: 2, To: 3})
+	member2 := &ast.MemberNode{Node: base2, Property: prop2}
+	member2.SetLocation(file.Location{From: 2, To: 3})
+	prop3 := &ast.StringNode{Value: "c"}
+	prop3.SetLocation(file.Location{From: 4, To: 5})
+	member3 := &ast.MemberNode{Node: member2, Property: prop3}
+	member3.SetLocation(file.Location{From: 4, To: 5})
+
+	if got := exprText(member3, source2); got != "a.b.c" {
+		t.Fatalf("exprText(a.b.c) = %q, want %q", got, "a.b.c")
+	}
+}
+
+// TestNodeSpan_MemberNodeBracketForm proves the bracket-matching fix: without
+// it, the naive children-span-union would miss the trailing "]" (the same
+// regression class §11 already fixed for CallNode/ArrayNode).
+func TestNodeSpan_MemberNodeBracketForm(t *testing.T) {
+	source := `a["b"]`
+	base := &ast.IdentifierNode{Value: "a"}
+	base.SetLocation(file.Location{From: 0, To: 1})
+	prop := &ast.StringNode{Value: "b"}
+	prop.SetLocation(file.Location{From: 2, To: 5}) // covers `"b"`, not the brackets.
+	member := &ast.MemberNode{Node: base, Property: prop}
+	member.SetLocation(file.Location{From: 1, To: 2}) // MemberNode.Location() covers only "[", per expr-lang/expr.
+
+	if got := exprText(member, source); got != `a["b"]` {
+		t.Fatalf("exprText(a[\"b\"]) = %q, want %q", got, `a["b"]`)
+	}
+}
+
+// TestNodeSpan_ChainNodeTransparent proves ChainNode's span is exactly its
+// wrapped node's own (already-correct) span, since ChainNode.Location()
+// itself covers only a fragment (see docs/architecture.md §12).
+func TestNodeSpan_ChainNodeTransparent(t *testing.T) {
+	source := "a?.b"
+	base := &ast.IdentifierNode{Value: "a"}
+	base.SetLocation(file.Location{From: 0, To: 1})
+	prop := &ast.StringNode{Value: "b"}
+	prop.SetLocation(file.Location{From: 3, To: 4})
+	member := &ast.MemberNode{Node: base, Property: prop, Optional: true}
+	member.SetLocation(file.Location{From: 3, To: 4})
+	chain := &ast.ChainNode{Node: member}
+	chain.SetLocation(file.Location{From: 3, To: 4}) // ChainNode.Location() covers only a fragment too.
+
+	if got := exprText(chain, source); got != "a?.b" {
+		t.Fatalf("exprText(a?.b) = %q, want %q", got, "a?.b")
 	}
 }
 
