@@ -11,9 +11,16 @@ grpolicy is **not** authentication and **not** authorization — it has no
 concept of "user," "role," or "permission." Given a compiled boolean
 expression and a `map[string]any` of attributes, it returns a boolean
 decision plus an explainable trace of exactly how that decision was
-reached. [grauth](https://github.com/gourdian25/grauth) owns the vocabulary
-of "who has which role"; grpolicy only ever sees attribute maps, and every
-RBAC/ABAC decision grauth makes routes through `grpolicy.Evaluate`.
+reached.
+
+It exists to turn attribute-based access checks and business rules — the
+kind of logic that otherwise ends up as scattered, hard-to-audit `if`
+statements — into a single compiled expression that can be evaluated
+repeatedly and cheaply against different attribute values, while staying
+**explainable**: every decision comes back with a full trace of which
+sub-expressions actually ran and what they returned, not just a bare
+`true`/`false`. A missing attribute or a type mismatch is always a loud,
+typed error, never a silently wrong answer.
 
 ## Part of the gourdian25 ecosystem
 
@@ -39,9 +46,6 @@ together:
   topic-based routing); grpolicy has no dependency on it — this is only a
   sibling in the ecosystem, since grpolicy has no storage backend of its
   own to integrate with.
-- [grauth](https://github.com/gourdian25/grauth) — the ecosystem's
-  authentication/authorization layer and grpolicy's primary consumer; every
-  RBAC/ABAC decision it makes routes through `grpolicy.Evaluate`.
 
 ## Table of Contents
 

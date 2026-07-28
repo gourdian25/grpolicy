@@ -9,10 +9,18 @@
 // about "users," "roles," or "permissions." Given a compiled boolean
 // expression and a map[string]any of attributes, it returns a Decision
 // (Allowed plus an explainable Trace of exactly how that result was
-// reached). It is the grauth repo's primary dependency: every RBAC/ABAC
-// decision grauth makes routes through grpolicy.Evaluate, with grauth
-// owning the vocabulary of "who has which role" and grpolicy only ever
-// seeing attribute maps.
+// reached).
+//
+// It exists so attribute-based access checks and business rules — the kind
+// of logic that otherwise ends up as scattered, hard-to-audit if statements
+// — can be expressed as a single compiled expression, evaluated repeatedly
+// and cheaply against different attribute values, while staying
+// explainable: every decision comes back with a full trace of which
+// sub-expressions actually ran and what they returned, not just a bare
+// true/false. A missing attribute or a type mismatch is always a loud,
+// typed error, never a silently wrong answer. Any vocabulary above
+// "attribute values" — users, roles, permissions, tenants — belongs to the
+// calling application, not to grpolicy.
 //
 // # Key Features
 //   - Boolean logic (&&, ||, !/not), comparisons (==, !=, <, <=, >, >=),
@@ -110,9 +118,9 @@
 // # Out of Scope
 //
 // grpolicy has no concept of "role" or "permission" as first-class types —
-// only attribute maps; if implementation pressure from grauth's own design
-// starts pulling role/permission vocabulary in here, that is a sign the
-// boundary is wrong, not a reason to add it. grpolicy never persists
+// only attribute maps; if implementation pressure ever starts pulling
+// role/permission vocabulary in here, that is a sign the boundary is
+// wrong, not a reason to add it. grpolicy never persists
 // policy text anywhere — where the expression string comes from (a config
 // file, a database row, a hardcoded string) is entirely the caller's
 // problem. Nested map/slice/array/struct attribute access, including

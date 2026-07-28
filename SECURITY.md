@@ -26,9 +26,9 @@ advisory will be published together with a patched release.
 
 ## Scope Notes
 
-grpolicy is a policy/expression evaluation engine that gates real access
-decisions in `grauth` (its primary consumer). Read this before relying on
-it for anything security-relevant:
+grpolicy is a policy/expression evaluation engine intended to gate real
+access and business-rule decisions in the calling application. Read this
+before relying on it for anything security-relevant:
 
 - **No code execution beyond registered functions.** grpolicy never calls
   `expr-lang/expr`'s own `Run`/`vm.Program` execution path — only
@@ -79,8 +79,8 @@ it for anything security-relevant:
   signs, or authenticates the expression string it's given — where it came
   from (a trusted config file vs. an untrusted multi-tenant input) is
   entirely the caller's problem. If policy strings may originate from a
-  less-trusted actor (e.g. a future multi-tenant `grauth` where tenant
-  admins author their own ABAC rules), the caller is responsible for any
+  less-trusted actor (e.g. a multi-tenant application where tenant admins
+  author their own ABAC rules), the caller is responsible for any
   authorization/review of the policy text itself before calling `Compile`.
 - **`Decision.Trace` is a debugging/explainability aid, not an audit
   record.** It is constructed fresh on every `Evaluate` call and is not
