@@ -273,8 +273,7 @@ grpolicy accepts any logger satisfying its own small `Logger` interface
 `log/slog`-shaped signatures every sibling repo uses, and the same shape
 `*slog.Logger` itself has, so any slog-based logger works with no adapter.
 grpolicy itself never imports grlog or log/slog; a `nil` Logger (the
-default) means grpolicy logs nothing. See CONVENTIONS.md at the workspace
-root for the ecosystem's logging level philosophy and known limitations.
+default) means grpolicy logs nothing.
 
 ## Testing
 
